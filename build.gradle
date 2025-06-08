@@ -1,13 +1,3 @@
-buildscript {
-    repositories {
-        mavenCentral()
-        gradlePluginPortal()
-    }
-    dependencies {
-        classpath 'com.guardsquare:proguard-gradle:7.7.0'
-    }
-}
-
 plugins {
     id 'java'
     id 'application'
@@ -23,6 +13,8 @@ repositories {
 dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+
+    implementation 'fr.inria.gforge.spoon:spoon-core:10.4.1'
 }
 
 java {
@@ -38,14 +30,16 @@ application {
     mainClass = 'com.obfuscationdemo.Main'
 }
 
-// Task to create a fat JAR with all dependencies
-task fatJar(type: Jar) {
+// Task: bundle all dependencies into a single JAR
+tasks.register('fatJar', Jar) {
     group = 'build'
     description = 'Create a fat JAR with all dependencies'
-    archiveClassifier = 'fat'
+    archiveClassifier.set('fat')
 
     from {
-        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+        configurations.runtimeClasspath.collect { file ->
+            file.isDirectory() ? file : zipTree(file)
+        }
     }
     with jar
 
@@ -58,167 +52,61 @@ task fatJar(type: Jar) {
     }
 }
 
-// ProGuard obfuscation task
-task proguard(type: proguard.gradle.ProGuardTask) {
+// Task: run Spoon processors to obfuscate source code
+tasks.register('spoonObfuscate', JavaExec) {
     group = 'obfuscation'
-    description = 'ProGuard obfuscation'
-    dependsOn = [fatJar]
+    description = 'Execute Spoon-based obfuscator'
+    dependsOn tasks.compileJava
 
-    injars files("$buildDir/libs/${project.name}-${version}-fat.jar")
-    outjars files("$buildDir/libs/${project.name}-${version}-obfuscated.jar")
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass.set('com.obfuscationdemo.Obfuscator')
 
-    libraryjars files(
-            JavaVersion.current().isJava9Compatible()
-                    ? "${System.getProperty('java.home')}/jmods/java.base.jmod"
-                    : "${System.getProperty('java.home')}/lib/rt.jar"
-    )
+    // Force the task to use Java 17
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    })
 
-    configuration file('proguard-rules.pro')
+    // Input and output directories for obfuscation
+    args = ['src/main/java', 'build/obfuscated-source']
+}
 
-    doLast {
-        println "Obfuscation completed!"
-        println "Original size: ${file("$buildDir/libs/${project.name}-${version}-fat.jar").length()} bytes"
-        println "Obfuscated size: ${file("$buildDir/libs/${project.name}-${version}-obfuscated.jar").length()} bytes"
+// Task to compile the obfuscated source code
+tasks.register('compileObfuscatedSource', JavaCompile) {
+    group = 'obfuscation'
+    description = 'Compile the obfuscated source code'
+    dependsOn spoonObfuscate
+
+    source = fileTree('build/obfuscated-source')
+    destinationDirectory = file('build/classes/java/obfuscated')
+    classpath = sourceSets.main.compileClasspath
+
+    sourceCompatibility = java.sourceCompatibility
+    targetCompatibility = java.targetCompatibility
+}
+
+// Task to create a JAR from the obfuscated classes
+tasks.register('obfuscatedJar', Jar) {
+    group = 'obfuscation'
+    description = 'Create a JAR file from the obfuscated classes'
+    dependsOn compileObfuscatedSource
+
+    archiveBaseName = project.name
+    archiveVersion = project.version
+    archiveClassifier = 'obfuscated'
+
+    from('build/classes/java/obfuscated')
+
+    manifest {
+        attributes(
+                'Main-Class': application.mainClass,
+                'Implementation-Title': project.name,
+                'Implementation-Version': project.version
+        )
     }
 }
 
-task downloadDecompiler {
-    group = 'setup'
-    description = 'Download CFR Java decompiler'
-
-    doLast {
-        mkdir "$projectDir/tools"
-        def decompilerFile = file("$projectDir/tools/cfr-0.152.jar")
-        if (!decompilerFile.exists()) {
-            println "Downloading CFR decompiler..."
-            new URL('https://github.com/leibnitz27/cfr/releases/download/0.152/cfr-0.152.jar')
-                    .withInputStream { i -> decompilerFile.withOutputStream { it << i } }
-            println "Decompiler downloaded to: ${decompilerFile.absolutePath}"
-        } else {
-            println "Decompiler already exists: ${decompilerFile.absolutePath}"
-        }
-    }
-}
-
-// Task to download and run decompiler
-task decompileOriginal(type: JavaExec) {
-    group = 'analysis'
-    description = 'Decompile original JAR to Java source'
-    dependsOn = [fatJar, downloadDecompiler]
-
-    classpath = files("$projectDir/tools/cfr-0.152.jar")
-    mainClass = 'org.benf.cfr.reader.Main'
-    args = [
-            "$buildDir/libs/${project.name}-${version}-fat.jar",
-            "--outputdir", "$buildDir/decompiled/original/",
-            "--caseinsensitivefs", "true",
-            "--silent", "false"
-    ]
-
-    doFirst {
-        delete "$buildDir/decompiled/original/"
-        mkdir "$buildDir/decompiled/original/"
-    }
-
-    doLast {
-        println "Original code decompiled to: $buildDir/decompiled/original/"
-    }
-}
-
-task decompileObfuscated(type: JavaExec) {
-    group = 'analysis'
-    description = 'Decompile obfuscated JAR to Java source'
-    dependsOn = [proguard, downloadDecompiler]
-
-    classpath = files("$projectDir/tools/cfr-0.152.jar")
-    mainClass = 'org.benf.cfr.reader.Main'
-    args = [
-            "$buildDir/libs/${project.name}-${version}-obfuscated.jar",
-            "--outputdir", "$buildDir/decompiled/obfuscated/",
-            "--caseinsensitivefs", "true",
-            "--silent", "false"
-    ]
-
-    doFirst {
-        delete "$buildDir/decompiled/obfuscated/"
-        mkdir "$buildDir/decompiled/obfuscated/"
-    }
-
-    doLast {
-        println "Obfuscated code decompiled to: $buildDir/decompiled/obfuscated/"
-    }
-}
-
-// Obfuscation analysis task
-task analyzeObfuscation {
-    group = 'analysis'
-    description = 'Complete obfuscation analysis with before/after comparison'
-    dependsOn = [decompileOriginal, decompileObfuscated]
-
-    doLast {
-        println "\n=== OBFUSCATION ANALYSIS COMPLETE ==="
-
-        def originalJar = file("$buildDir/libs/${project.name}-${version}-fat.jar")
-        def obfuscatedJar = file("$buildDir/libs/${project.name}-${version}-obfuscated.jar")
-
-        println "File size comparison:"
-        println "  Original JAR: ${originalJar.length()} bytes"
-        println "  Obfuscated JAR: ${obfuscatedJar.length()} bytes"
-        println "  Size reduction: ${((originalJar.length() - obfuscatedJar.length()) / originalJar.length() * 100).round(2)}%"
-
-        println "\nDecompiled code locations:"
-        println "  Original: $buildDir/decompiled/original/"
-        println "  Obfuscated: $buildDir/decompiled/obfuscated/"
-
-        def originalFiles = fileTree("$buildDir/decompiled/original/").include("**/*.java").files.size()
-        def obfuscatedFiles = fileTree("$buildDir/decompiled/obfuscated/").include("**/*.java").files.size()
-
-        println "\nClass count:"
-        println "  Original classes: $originalFiles"
-        println "  Obfuscated classes: $obfuscatedFiles"
-
-        println "\nTo view the obfuscated Java code, check the files in:"
-        println "$buildDir/decompiled/obfuscated/"
-    }
-}
-
-// Task to run obfuscated JAR
-task runObfuscated(type: JavaExec) {
-    group = 'application'
-    description = 'Run the obfuscated JAR file'
-    dependsOn = [proguard]
-
-    classpath = files("$buildDir/libs/${project.name}-${version}-obfuscated.jar")
-    mainClass = 'com.obfuscationdemo.Main'
-
-    doFirst {
-        println "Running obfuscated application..."
-    }
-}
-
-// Task to compare bytecode
-task compareBytecode(type: JavaExec) {
-    group = 'analysis'
-    description = 'Compare bytecode between original and obfuscated versions'
-    dependsOn = [fatJar, proguard]
-
-    doLast {
-        println "\n=== BYTECODE COMPARISON ==="
-
-        // Use javap to show bytecode differences
-        def originalBytecode = ["javap", "-c", "-cp", "$buildDir/libs/${project.name}-${version}-fat.jar", "com.obfuscationdemo.Main"].execute().text
-        def obfuscatedBytecode = ["javap", "-c", "-cp", "$buildDir/libs/${project.name}-${version}-obfuscated.jar", "com.obfuscationdemo.Main"].execute().text
-
-        println "Original bytecode length: ${originalBytecode.length()} characters"
-        println "Obfuscated bytecode length: ${obfuscatedBytecode.length()} characters"
-
-        file("$buildDir/analysis/original-bytecode.txt").text = originalBytecode
-        file("$buildDir/analysis/obfuscated-bytecode.txt").text = obfuscatedBytecode
-
-        println "Bytecode saved to $buildDir/analysis/ for detailed comparison"
-    }
-}
-
-test {
+tasks.test {
     useJUnitPlatform()
 }
+
+
