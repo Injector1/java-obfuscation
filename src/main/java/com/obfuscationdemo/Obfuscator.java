@@ -68,14 +68,6 @@ public class Obfuscator {
 
         launcher.setSourceOutputDirectory(outputDir);
         launcher.addInputResource(inputDir);
-
-        Map<String, String> methodNameMapping = new HashMap<>();
-
-        launcher.addProcessor(new MethodNameObfuscationProcessor(methodNameMapping));
-        launcher.addProcessor(new MethodInvocationProcessor(methodNameMapping));
-        launcher.addProcessor(new ParameterNameProcessor());
-        launcher.addProcessor(new LocalVariableProcessor());
-
         launcher.addProcessor(new MethodBodyRemovalProcessor());
 
         launcher.run();
