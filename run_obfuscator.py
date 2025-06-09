@@ -58,7 +58,28 @@ def display_obfuscated_file(output_dir_name, relative_file_path="source/Main.jav
     except Exception as e:
         print(f"Error reading obfuscated file {obfuscated_file_path_actual}: {e}")
 
+def display_source_file(file_path_from_project_root, description="Original"):
+    """Prints the content of a specific source file from the project root."""
+    base_path = "/app" if os.path.exists("/.dockerenv") else "."
+    actual_file_path = os.path.join(base_path, file_path_from_project_root)
+
+    try:
+        print(f"\nReading {description} file: {actual_file_path}")
+        with open(actual_file_path, 'r') as f:
+            content = f.read()
+            print(f"\n--- {description} {os.path.basename(file_path_from_project_root)} ---")
+            print(content)
+            print(f"--- End of {description} {os.path.basename(file_path_from_project_root)} ---")
+    except FileNotFoundError:
+        print(f"Error: {description} file not found at {actual_file_path}")
+    except Exception as e:
+        print(f"Error reading {description} file {actual_file_path}: {e}")
+
 if __name__ == "__main__":
+    original_main_java_path = "src/main/java/source/Main.java"
+    print(f"\n--- Displaying Original Source File ({original_main_java_path}) ---")
+    display_source_file(original_main_java_path, "Original")
+
     print("\n--- Starting 'bodies' obfuscation (name changes + body removal) ---")
     if execute_gradle_obfuscation("obfuscated-source-bodies", "bodies"):
         display_obfuscated_file("obfuscated-source-bodies", "source/Main.java")
