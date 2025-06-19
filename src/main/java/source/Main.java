@@ -7,19 +7,6 @@ public class Main {
         //TIP Press <shortcut actionId="ShowIntentionActions"/> with your caret at the highlighted text
         // to see how IntelliJ IDEA suggests fixing it.
         System.out.printf("Hello and welcome!");
-
-        doSomething();
-    }
-
-    /**
-     * This method demonstrates a simple loop.
-     */
-    public static void doSomething() {
-        for (int i = 1; i <= 5; i++) {
-            //TIP Press <shortcut actionId="Debug"/> to start debugging your code. We have set one <icon src="AllIcons.Debugger.Db_set_breakpoint"/> breakpoint
-            // for you, but you can always add more by pressing <shortcut actionId="ToggleLineBreakpoint"/>.
-            System.out.println("i = " + i);
-        }
     }
 
     /**
@@ -72,7 +59,7 @@ public class Main {
      * @param array - the array to be sorted
      * @return the sorted array
      */
-    public int[] bubbleSort(int[] array) {
+    public static int[] bubbleSort(int[] array) {
         int n = array.length;
         boolean swapped;
         do {
