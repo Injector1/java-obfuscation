@@ -105,6 +105,13 @@ def generate_tests_with_llm(java_code_string, code_description):
     except Exception:
         pass
 
+    # Generate a specific test class name based on the obfuscation type
+    test_class_name = "LLMGeneratedMainTest"
+    if "bodies" in code_description.lower():
+        test_class_name = "LLMGeneratedBodiesTest"
+    elif "names" in code_description.lower():
+        test_class_name = "LLMGeneratedNamesTest"
+
     prompt = f'''You are an expert Java software developer specializing in writing comprehensive unit tests.
         Your task is to generate a complete JUnit 5 test class for the provided Java code.
         Instructions:
@@ -112,10 +119,11 @@ def generate_tests_with_llm(java_code_string, code_description):
         2. IMPORTANT: Include all necessary imports for JUnit 5. You MUST include these specific imports:
            `import org.junit.jupiter.api.*;` 
            `import static org.junit.jupiter.api.Assertions.*;`
+           `import source.Main;`
         3. Generate test methods for all public methods in the provided code. If the main method is the primary entry point for logic, include tests for its behavior or the methods it calls.
         4. For methods with non-void return types, include assertions (e.g., `assertEquals`, `assertTrue`, `assertFalse`, `assertNotNull`, `assertThrows`) to check for expected outcomes. You may need to infer reasonable inputs and expected outputs based on the method's logic or name.
         5. For void methods, try to test their behavior by checking for expected side effects if possible (though this might be hard without more context or mocking capabilities). At a minimum, ensure they can be called without throwing unexpected exceptions for basic valid inputs.
-        6. Name the test class "LLMGenerated{class_name}Test" to avoid conflicts with existing test classes.
+        6. IMPORTANT: The test class MUST be named "{test_class_name}" (not any other name).
         7. Pay attention to constructors and how objects of the class should be instantiated for testing.
         8. Handle potential exceptions thrown by the methods under test using `assertThrows` where appropriate.
         9. If a method is instance-based (non-static), make sure to create an instance of the class before calling the method.
@@ -244,6 +252,30 @@ def save_test_to_file(test_code, test_file_path):
 
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(actual_file_path), exist_ok=True)
+
+        # Extract the expected class name from the file path
+        expected_class_name = os.path.splitext(os.path.basename(test_file_path))[0]
+
+        # Replace class declaration to match the file name
+        # This ensures the class is named properly regardless of what the LLM generated
+        class_pattern = r'(public\s+)?class\s+([A-Za-z0-9_]+)'
+        test_code = re.sub(class_pattern, f'class {expected_class_name}', test_code)
+
+        # Ensure source.Main is imported
+        if 'import source.Main;' not in test_code:
+            # Find where to insert the import
+            import_position = 0
+            lines = test_code.splitlines()
+            for i, line in enumerate(lines):
+                if line.strip().startswith('import '):
+                    import_position = i + 1
+                elif line.strip().startswith('class ') and import_position == 0:
+                    import_position = i
+                    break
+
+            # Insert the import
+            lines.insert(import_position, 'import source.Main;')
+            test_code = '\n'.join(lines)
 
         with open(actual_file_path, 'w') as f:
             f.write(test_code)
