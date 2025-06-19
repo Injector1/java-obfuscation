@@ -4,6 +4,8 @@ import sys
 import requests
 import json
 import re
+import xml.etree.ElementTree as ET
+from datetime import datetime
 
 # --- Constants for Ollama API ---
 OLLAMA_API_URL = "http://rhaegal.dimis.fim.uni-passau.de:15343/api/generate"
@@ -214,6 +216,133 @@ def save_test_to_file(test_code, test_file_path):
         print(f"Error saving generated test to file: {e}")
         return False
 
+def parse_test_results():
+    """Parse the JUnit XML test results to provide detailed test information."""
+    base_path = "/app" if os.path.exists("/.dockerenv") else "."
+    test_results_dir = os.path.join(base_path, "build/test-results/test")
+
+    if not os.path.exists(test_results_dir):
+        print("No test results directory found.")
+        return None
+
+    results = {
+        "total": 0,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "tests": [],
+        "total_time": 0
+    }
+
+    # Find all XML files in test results directory
+    xml_files = [f for f in os.listdir(test_results_dir) if f.endswith(".xml")]
+
+    for xml_file in xml_files:
+        try:
+            tree = ET.parse(os.path.join(test_results_dir, xml_file))
+            testsuite = tree.getroot()
+
+            # Get test suite information
+            results["total"] += int(testsuite.get("tests", 0))
+            results["failed"] += int(testsuite.get("failures", 0)) + int(testsuite.get("errors", 0))
+            results["skipped"] += int(testsuite.get("skipped", 0))
+
+            suite_time = float(testsuite.get("time", 0))
+            results["total_time"] += suite_time
+
+            suite_name = testsuite.get("name", "Unknown")
+
+            # Process individual test cases
+            for testcase in testsuite.findall(".//testcase"):
+                test_info = {
+                    "suite": suite_name,
+                    "name": testcase.get("name", "Unknown"),
+                    "class": testcase.get("classname", "Unknown"),
+                    "time": float(testcase.get("time", 0)),
+                    "status": "PASSED"
+                }
+
+                # Check for failures or errors
+                if testcase.find("failure") is not None or testcase.find("error") is not None:
+                    test_info["status"] = "FAILED"
+
+                    if testcase.find("failure") is not None:
+                        failure = testcase.find("failure")
+                        test_info["failure_type"] = failure.get("type", "Unknown")
+                        test_info["failure_message"] = failure.get("message", "No message")
+
+                    if testcase.find("error") is not None:
+                        error = testcase.find("error")
+                        test_info["error_type"] = error.get("type", "Unknown")
+                        test_info["error_message"] = error.get("message", "No message")
+
+                # Check for skipped tests
+                if testcase.find("skipped") is not None:
+                    test_info["status"] = "SKIPPED"
+
+                results["tests"].append(test_info)
+
+        except Exception as e:
+            print(f"Error parsing test results file {xml_file}: {e}")
+
+    results["passed"] = results["total"] - results["failed"] - results["skipped"]
+    return results
+
+def print_detailed_test_report(results):
+    """Prints a detailed, formatted report of test results."""
+    if not results:
+        print("No test results available.")
+        return
+
+    print("\n")
+    print("=" * 80)
+    print(f"{'TEST EXECUTION SUMMARY':^80}")
+    print("=" * 80)
+    print(f"Total Tests: {results['total']}")
+    print(f"Tests Passed: {results['passed']} ({results['passed']/results['total']*100:.1f}%)")
+    print(f"Tests Failed: {results['failed']} ({results['failed']/results['total']*100:.1f}%)")
+    print(f"Tests Skipped: {results['skipped']} ({results['skipped']/results['total']*100:.1f}%)")
+    print(f"Total Execution Time: {results['total_time']:.3f} seconds")
+    print("=" * 80)
+
+    # Print test details in a table
+    print(f"{'STATUS':<10} {'TEST CLASS':<30} {'TEST METHOD':<30} {'TIME (s)':<10}")
+    print("-" * 80)
+
+    # Sort tests by status (failures first) and then by execution time (slowest first)
+    sorted_tests = sorted(results['tests'], key=lambda x: (0 if x['status'] == 'FAILED' else (1 if x['status'] == 'SKIPPED' else 2), -x['time']))
+
+    for test in sorted_tests:
+        status_color = ""
+        status_end = ""
+
+        # If in a terminal environment, add colors
+        if sys.stdout.isatty():
+            if test['status'] == 'PASSED':
+                status_color = "\033[92m"  # Green
+            elif test['status'] == 'FAILED':
+                status_color = "\033[91m"  # Red
+            elif test['status'] == 'SKIPPED':
+                status_color = "\033[93m"  # Yellow
+            status_end = "\033[0m"  # Reset color
+
+        class_name = test['class'].split('.')[-1]  # Just the class name without package
+        print(f"{status_color}{test['status']:<10}{status_end} {class_name:<30} {test['name']:<30} {test['time']:.3f}")
+
+        # Print failure details if test failed
+        if test['status'] == 'FAILED' and ('failure_message' in test or 'error_message' in test):
+            print(f"    Failure: {test.get('failure_message', test.get('error_message', 'Unknown error'))}")
+
+    print("=" * 80)
+
+    # Print HTML report location
+    base_path = "/app" if os.path.exists("/.dockerenv") else "."
+    test_report_path = os.path.join(base_path, "build/reports/tests/test/index.html")
+    if os.path.exists(test_report_path):
+        print(f"Detailed HTML report: {test_report_path}")
+
+    print("=" * 80)
+
 def run_tests():
     """Runs the JUnit tests and returns the test results."""
     try:
@@ -227,27 +356,25 @@ def run_tests():
         process = subprocess.run(command, capture_output=True, text=True, check=False)
 
         print("Test execution completed.")
-        print("\n--- Test Results ---")
+        print("\n--- Test Results (Gradle Output) ---")
         print(process.stdout)
 
         if process.stderr:
             print("Test errors:")
             print(process.stderr)
 
+        # Parse and print detailed test results
+        print("\n--- Detailed Test Results ---")
+        test_results = parse_test_results()
+        if test_results:
+            print_detailed_test_report(test_results)
+        else:
+            print("No detailed test results available.")
+
         if process.returncode != 0:
             print(f"Warning: Tests finished with non-zero return code: {process.returncode}")
         else:
             print("All tests passed successfully!")
-
-        # Try to find and print the HTML test report
-        try:
-            base_path = "/app" if os.path.exists("/.dockerenv") else "."
-            test_report_path = os.path.join(base_path, "build/reports/tests/test/index.html")
-
-            if os.path.exists(test_report_path):
-                print(f"\nDetailed test report is available at: {test_report_path}")
-        except Exception:
-            pass
 
         return process.returncode == 0
     except Exception as e:
