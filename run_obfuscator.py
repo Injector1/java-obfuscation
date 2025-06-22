@@ -11,6 +11,24 @@ from datetime import datetime
 OLLAMA_API_URL = "http://rhaegal.dimis.fim.uni-passau.de:15343/api/generate"
 OLLAMA_MODEL_NAME = "codellama:7b"
 
+def clean_test_directory():
+    """Deletes all generated test files from the test directory to prevent conflicts."""
+    test_dir = "src/test/java/source"
+    base_path = "/app" if os.path.exists("/.dockerenv") else "."
+    actual_test_dir = os.path.join(base_path, test_dir)
+
+    if not os.path.isdir(actual_test_dir):
+        return
+
+    print(f"\n--- Cleaning test directory: {actual_test_dir} ---")
+    for filename in os.listdir(actual_test_dir):
+        if filename.startswith("LLMGenerated") and filename.endswith(".java"):
+            try:
+                os.remove(os.path.join(actual_test_dir, filename))
+                print(f"Removed old test file: {filename}")
+            except OSError as e:
+                print(f"Error removing file {filename}: {e}")
+
 def execute_gradle_obfuscation(output_dir_name, mode):
     """Runs the Gradle obfuscation task with a specific mode and output directory."""
     try:
@@ -118,16 +136,17 @@ def generate_tests_with_llm(java_code_string, code_description):
         1. The test class should be fully self-contained and ready to compile.
         2. IMPORTANT: Include all necessary imports for JUnit 5. You MUST include these specific imports:
            `import org.junit.jupiter.api.*;` 
-           `import static org.junit.jupiter.api.Assertions.*;`
+           `import static org.junit.jupiter.api.Assertions.*;` 
            `import source.Main;`
-        3. Generate test methods for all public methods in the provided code. If the main method is the primary entry point for logic, include tests for its behavior or the methods it calls.
-        4. For methods with non-void return types, include assertions (e.g., `assertEquals`, `assertTrue`, `assertFalse`, `assertNotNull`, `assertThrows`) to check for expected outcomes. You may need to infer reasonable inputs and expected outputs based on the method's logic or name.
+        3. Generate test methods ONLY for the public methods that are explicitly defined in the provided Java code. Do not generate tests for methods that do not exist.
+        4. For methods with non-void return types, include assertions (e.g., `assertEquals`, `assertTrue`, `assertFalse`, `assertNotNull`, `assertThrows`) to check for expected outcomes. You may need to infer reasonable inputs and expected outputs based on the method's logic or name. Be very careful with the expected values in your assertions.
         5. For void methods, try to test their behavior by checking for expected side effects if possible (though this might be hard without more context or mocking capabilities). At a minimum, ensure they can be called without throwing unexpected exceptions for basic valid inputs.
         6. IMPORTANT: The test class MUST be named "{test_class_name}" (not any other name).
         7. Pay attention to constructors and how objects of the class should be instantiated for testing.
         8. Handle potential exceptions thrown by the methods under test using `assertThrows` where appropriate.
-        9. If a method is instance-based (non-static), make sure to create an instance of the class before calling the method.
-        10. IMPORTANT: Provide only the Java code without any additional text or code fences. Do not include ```java or ``` markers, or any explanatory text.
+        9. If a method is instance-based (non-static), make sure to create an instance of the class before calling the method (e.g., `Main main = new Main(); main.methodName();`).
+        10. If a method is static, you MUST call it on the class directly (e.g., `Main.methodName();`).
+        11. IMPORTANT: Provide only the Java code without any additional text or code fences. Do not include ```java or ``` markers, or any explanatory text.
 
         The Java code to test is as follows:
         ```java
@@ -186,10 +205,13 @@ def ensure_junit_imports(code_text):
     # Check if static imports for assertions are present
     static_assertion_import = "import static org.junit.jupiter.api.Assertions.*;"
     junit_api_import = "import org.junit.jupiter.api.*;"
+    arrays_import = "import java.util.Arrays;"
 
     # Check if code already has the imports
     has_static_assertions = "import static org.junit.jupiter.api.Assertions" in code_text
     has_junit_api = "import org.junit.jupiter.api" in code_text
+    needs_arrays = 'assertArrayEquals' in code_text or 'Arrays.toString' in code_text or 'Arrays.equals' in code_text
+    has_arrays = arrays_import in code_text
 
     # Find package statement or the first line to insert imports after
     lines = code_text.splitlines()
@@ -207,10 +229,15 @@ def ensure_junit_imports(code_text):
 
     if not has_junit_api:
         lines.insert(insert_position, junit_api_import)
+        insert_position += 1
+
+    if needs_arrays and not has_arrays:
+        lines.insert(insert_position, arrays_import)
+        insert_position += 1
 
     # Add an empty line after imports if there isn't one already
-    if lines[insert_position + 1].strip() != "":
-        lines.insert(insert_position + 1, "")
+    if insert_position < len(lines) and lines[insert_position].strip() != "":
+        lines.insert(insert_position, "")
 
     return "\n".join(lines)
 
@@ -451,49 +478,49 @@ def run_tests():
         print(f"Error running tests: {e}")
         return False, None
 
-def compare_test_results(original_results, bodies_results):
-    """Compare test results between original and bodies-obfuscated tests."""
-    if not original_results or not bodies_results:
+def compare_test_results(original_results, other_results, other_name):
+    """Compare test results between original and another set of tests."""
+    if not original_results or not other_results:
         print("Cannot compare test results - one or both result sets are missing.")
         return
 
     print("\n")
     print("=" * 80)
-    print(f"{'COMPARISON: ORIGINAL VS BODIES-OBFUSCATED TESTS':^80}")
+    print(f"{f'COMPARISON: ORIGINAL VS {other_name.upper()} TESTS':^80}")
     print("=" * 80)
 
-    print(f"{'Metric':<30} {'Original':<20} {'Bodies-Obfuscated':<20} {'Difference':<10}")
+    print(f"{'Metric':<30} {'Original':<20} {other_name:<20} {'Difference':<10}")
     print("-" * 80)
 
     # Compare basic metrics
     metrics = [
-        ("Total Tests", original_results['total'], bodies_results['total']),
-        ("Passed Tests", original_results['passed'], bodies_results['passed']),
-        ("Failed Tests", original_results['failed'], bodies_results['failed']),
-        ("Skipped Tests", original_results['skipped'], bodies_results['skipped']),
+        ("Total Tests", original_results['total'], other_results['total']),
+        ("Passed Tests", original_results['passed'], other_results['passed']),
+        ("Failed Tests", original_results['failed'], other_results['failed']),
+        ("Skipped Tests", original_results['skipped'], other_results['skipped']),
         ("Pass Rate (%)", original_results['passed']/original_results['total']*100 if original_results['total'] > 0 else 0,
-                           bodies_results['passed']/bodies_results['total']*100 if bodies_results['total'] > 0 else 0),
-        ("Total Execution Time (s)", original_results['total_time'], bodies_results['total_time'])
+                           other_results['passed']/other_results['total']*100 if other_results['total'] > 0 else 0),
+        ("Total Execution Time (s)", original_results['total_time'], other_results['total_time'])
     ]
 
-    for metric_name, original_value, bodies_value in metrics:
+    for metric_name, original_value, other_value in metrics:
         if isinstance(original_value, int):
-            diff = bodies_value - original_value
-            print(f"{metric_name:<30} {original_value:<20d} {bodies_value:<20d} {diff:+d}")
+            diff = other_value - original_value
+            print(f"{metric_name:<30} {original_value:<20d} {other_value:<20d} {diff:+d}")
         else:
-            diff = bodies_value - original_value
-            print(f"{metric_name:<30} {original_value:<20.3f} {bodies_value:<20.3f} {diff:+.3f}")
+            diff = other_value - original_value
+            print(f"{metric_name:<30} {original_value:<20.3f} {other_value:<20.3f} {diff:+.3f}")
 
     print("=" * 80)
 
     # Compare test methods between the two result sets
     original_test_methods = {f"{test['class']}::{test['name']}": test for test in original_results['tests']}
-    bodies_test_methods = {f"{test['class']}::{test['name']}": test for test in bodies_results['tests']}
+    other_test_methods = {f"{test['class']}::{test['name']}": test for test in other_results['tests']}
 
     # Find unique tests in each set
-    original_unique = set(original_test_methods.keys()) - set(bodies_test_methods.keys())
-    bodies_unique = set(bodies_test_methods.keys()) - set(original_test_methods.keys())
-    common_tests = set(original_test_methods.keys()) & set(bodies_test_methods.keys())
+    original_unique = set(original_test_methods.keys()) - set(other_test_methods.keys())
+    other_unique = set(other_test_methods.keys()) - set(original_test_methods.keys())
+    common_tests = set(original_test_methods.keys()) & set(other_test_methods.keys())
 
     # Print unique tests
     if original_unique:
@@ -502,29 +529,63 @@ def compare_test_results(original_results, bodies_results):
             test = original_test_methods[test_key]
             print(f"  - {test['class'].split('.')[-1]}::{test['name']} ({test['status']})")
 
-    if bodies_unique:
-        print("\nTests only in Bodies-Obfuscated:")
-        for test_key in sorted(bodies_unique):
-            test = bodies_test_methods[test_key]
+    if other_unique:
+        print(f"\nTests only in {other_name}:")
+        for test_key in sorted(other_unique):
+            test = other_test_methods[test_key]
             print(f"  - {test['class'].split('.')[-1]}::{test['name']} ({test['status']})")
 
     # Compare status of common tests
     status_changes = []
     for test_key in common_tests:
         original_status = original_test_methods[test_key]['status']
-        bodies_status = bodies_test_methods[test_key]['status']
+        other_status = other_test_methods[test_key]['status']
 
-        if original_status != bodies_status:
-            status_changes.append((test_key, original_status, bodies_status))
+        if original_status != other_status:
+            status_changes.append((test_key, original_status, other_status))
 
     if status_changes:
         print("\nTests with changed status:")
-        for test_key, original_status, bodies_status in sorted(status_changes):
+        for test_key, original_status, other_status in sorted(status_changes):
             test_name = test_key.split('::')[1]
             class_name = test_key.split('::')[0].split('.')[-1]
-            print(f"  - {class_name}::{test_name}: {original_status} → {bodies_status}")
+            print(f"  - {class_name}::{test_name}: {original_status} → {other_status}")
 
     print("=" * 80)
+
+def deobfuscate_tests(test_file_path):
+    """Deobfuscates a test file by replacing obfuscated method names with original names."""
+    try:
+        print(f"\n--- Deobfuscating test file: {test_file_path} ---")
+        if not os.access("./gradlew", os.X_OK):
+            os.chmod("./gradlew", 0o755)
+
+        # Run the deobfuscator using the 'deobfuscate' task.
+        # The deobfuscator now modifies the file in-place.
+        command = ["./gradlew", "deobfuscate", f"--args={test_file_path}", "--console=plain"]
+
+        print(f"Executing command: {' '.join(command)}")
+        process = subprocess.run(command, capture_output=True, text=True, check=False)
+
+        print(f"Deobfuscation process completed.")
+        sys.stdout.write("stdout:\n" + process.stdout + "\n")
+        if process.stderr:
+            sys.stderr.write("stderr:\n" + process.stderr + "\n")
+
+        if process.returncode != 0:
+            print(f"Error: Deobfuscation process failed with return code {process.returncode}.")
+            return False
+
+        return True
+
+    except subprocess.CalledProcessError as e:
+        print(f"Error during deobfuscation: {e}")
+        sys.stdout.write("stdout:\n" + e.stdout + "\n")
+        sys.stderr.write("stderr:\n" + e.stderr + "\n")
+        return False
+    except Exception as e:
+        print(f"An unexpected error occurred during deobfuscation: {e}")
+        return False
 
 if __name__ == "__main__":
     original_main_java_path = "src/main/java/source/Main.java"
@@ -532,6 +593,7 @@ if __name__ == "__main__":
     original_code_content = get_and_print_code(original_main_java_path, "Original Main.java")
     generated_test_code = None
     bodies_test_code = None
+    names_code_content = None
 
     if original_code_content:
         generated_test_code = generate_tests_with_llm(original_code_content, "Original Main.java")
@@ -550,15 +612,17 @@ if __name__ == "__main__":
         obfuscated_names_path = "build/obfuscated-source-names/source/Main.java"
         names_code_content = get_and_print_code(obfuscated_names_path, "Names Obfuscated Main.java")
         if names_code_content:
-            generate_tests_with_llm(names_code_content, "Names Obfuscated Main.java")
+            names_test_code = generate_tests_with_llm(names_code_content, "Names Obfuscated Main.java")
     else:
         print("Obfuscation process for 'names' failed. Skipping test generation for this version.")
 
     # Save test results
     original_test_results = None
     bodies_test_results = None
+    names_test_results = None
 
     # Save the generated test from the original code to a file if it was generated
+    clean_test_directory()
     if generated_test_code:
         test_file_path = "src/test/java/source/LLMGeneratedMainTest.java"
         if save_test_to_file(generated_test_code, test_file_path):
@@ -570,6 +634,7 @@ if __name__ == "__main__":
         print("\nNo test code was generated for original code. Skipping test execution.")
 
     # Save the generated test from the bodies-obfuscated code to a file if it was generated
+    clean_test_directory()
     if bodies_test_code:
         test_file_path = "src/test/java/source/LLMGeneratedBodiesTest.java"
         if save_test_to_file(bodies_test_code, test_file_path):
@@ -580,8 +645,32 @@ if __name__ == "__main__":
     else:
         print("\nNo test code was generated for bodies-obfuscated code. Skipping test execution.")
 
+    # Save the generated test from the names-obfuscated code to a file if it was generated
+    clean_test_directory()
+    if names_test_code:
+        names_test_file_path = "src/test/java/source/LLMGeneratedNamesTest.java"
+        if save_test_to_file(names_test_code, names_test_file_path):
+            # Deobfuscate the names test in-place
+            if deobfuscate_tests(names_test_file_path):
+                print(f"\n\n--- Running JUnit tests with deobfuscated LLM tests for names-obfuscated code ---")
+                success, names_test_results = run_tests()
+
+                # Compare with original test results if available
+                if original_test_results and names_test_results:
+                    print("\n\n--- Comparing Original vs Names-Obfuscated (Deobfuscated) Test Results ---")
+                    compare_test_results(original_test_results, names_test_results, "Names-Obfuscated (Deobfuscated)")
+            else:
+                print("Failed to deobfuscate names tests. Skipping test execution.")
+        else:
+            print("Failed to save generated tests for names-obfuscated code. Skipping test execution.")
+    else:
+        print("\nNo test code was generated for names-obfuscated code. Skipping test execution.")
+
     # Compare test results if both are available
     if original_test_results and bodies_test_results:
-        compare_test_results(original_test_results, bodies_test_results)
+        compare_test_results(original_test_results, bodies_test_results, "Bodies-Obfuscated")
+
+    if original_test_results and names_test_results:
+        compare_test_results(original_test_results, names_test_results, "Names-Obfuscated (Deobfuscated)")
 
     print("\n\n--- Script Finished ---")
