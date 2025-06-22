@@ -109,4 +109,14 @@ tasks.test {
     useJUnitPlatform()
 }
 
+tasks.register('deobfuscate', JavaExec) {
+    group = 'obfuscation'
+    description = 'Runs the Deobfuscator main class'
+    dependsOn tasks.compileJava
+    classpath = sourceSets.main.runtimeClasspath + sourceSets.test.compileClasspath
+    mainClass.set('com.obfuscationdemo.Deobfuscator')
 
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    })
+}
