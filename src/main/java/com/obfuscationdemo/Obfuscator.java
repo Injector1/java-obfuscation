@@ -6,6 +6,7 @@ import spoon.reflect.declaration.*;
 import spoon.reflect.code.*;
 import spoon.reflect.factory.Factory;
 import spoon.reflect.reference.CtExecutableReference;
+import spoon.reflect.reference.CtTypeReference;
 import spoon.reflect.reference.CtVariableReference;
 import spoon.reflect.visitor.filter.TypeFilter;
 
@@ -167,13 +168,22 @@ public class Obfuscator {
         public void process(CtMethod<?> method) {
             String originalName = method.getSimpleName();
 
-            if (originalName.equals("main") || nameMapping.containsKey(originalName)) {
+            // Skip main method
+            if (originalName.equals("main")) {
                 return;
             }
 
-            String obfuscatedName = generateObfuscatedName();
-            nameMapping.put(originalName, obfuscatedName);
+            String obfuscatedName;
+            // If we have already obfuscated a method with this name, reuse the obfuscated name
+            if (nameMapping.containsKey(originalName)) {
+                obfuscatedName = nameMapping.get(originalName);
+            } else {
+                // Otherwise, generate a new obfuscated name and store it
+                obfuscatedName = generateObfuscatedName();
+                nameMapping.put(originalName, obfuscatedName);
+            }
 
+            // Set the new obfuscated name for the method
             method.setSimpleName(obfuscatedName);
         }
 
@@ -202,12 +212,28 @@ public class Obfuscator {
             CtExecutableReference<?> execRef = invocation.getExecutable();
             String methodName = execRef.getSimpleName();
 
-            if (!methodNameMapping.containsKey(methodName)) {
-                return;
-            }
+            if (methodNameMapping.containsKey(methodName)) {
+                // If the method's declaration is found in the processed source, it's safe to rename.
+                if (execRef.getDeclaration() != null) {
+                    execRef.setSimpleName(methodNameMapping.get(methodName));
+                    return;
+                }
 
-            String obfuscatedName = methodNameMapping.get(methodName);
-            execRef.setSimpleName(obfuscatedName);
+                // If the declaration is not found, it could be a library method, or it could be
+                // one of our own methods that was renamed, breaking the reference.
+                // We use a heuristic based on package names to avoid renaming library calls.
+                CtTypeReference<?> declaringType = execRef.getDeclaringType();
+                if (declaringType != null) {
+                    String qualifiedName = declaringType.getQualifiedName();
+                    if (qualifiedName.startsWith("java.") || qualifiedName.startsWith("javax.")) {
+                        // This is likely a JDK library call, so we don't touch it.
+                        return;
+                    }
+                }
+
+                // If it's not a known library package, we assume it's our code and rename the invocation.
+                execRef.setSimpleName(methodNameMapping.get(methodName));
+            }
         }
     }
 

@@ -87,9 +87,10 @@ public class Deobfuscator {
         try {
             Launcher launcher = new Launcher();
             launcher.addInputResource(inputFile);
-            // Tell Spoon to write output back to the source directory's parent to avoid nested source/source
+            // Set the output directory to the root of the test source to avoid nested package dirs
             launcher.setSourceOutputDirectory(Paths.get(inputFile).getParent().getParent().toFile());
             launcher.getEnvironment().setAutoImports(true);
+            launcher.getEnvironment().setNoClasspath(true); // Avoids issues with classpath resolution
 
             launcher.addProcessor(new MethodInvocationDeobfuscator(reverseMethodMapping));
             launcher.addProcessor(new TestMethodNameDeobfuscator(reverseMethodMapping));
