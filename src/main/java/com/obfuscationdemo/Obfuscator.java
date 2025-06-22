@@ -9,11 +9,22 @@ import spoon.reflect.reference.CtExecutableReference;
 import spoon.reflect.reference.CtVariableReference;
 import spoon.reflect.visitor.filter.TypeFilter;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
 
 public class Obfuscator {
+    // File to store obfuscation mappings
+    private static final String MAPPING_FILE = "build/obfuscation-mapping.ser";
+
+    private static final Map<String, String> methodNameMapping = new HashMap<>();
+    private static final Map<String, Map<String, String>> parameterNameMapping = new HashMap<>();
+    private static final Map<String, Map<String, String>> localVarNameMapping = new HashMap<>();
 
     public static void main(String[] args) {
         String inputDir = args.length > 0 ? args[0] : "src/main/java/source";
@@ -50,7 +61,10 @@ public class Obfuscator {
         launcher.setSourceOutputDirectory(outputDir);
         launcher.addInputResource(inputDir);
 
-        Map<String, String> methodNameMapping = new HashMap<>();
+        // Reset the mappings before starting a new obfuscation
+        methodNameMapping.clear();
+        parameterNameMapping.clear();
+        localVarNameMapping.clear();
 
         launcher.addProcessor(new MethodNameObfuscationProcessor(methodNameMapping));
         launcher.addProcessor(new MethodInvocationProcessor(methodNameMapping));
@@ -58,6 +72,64 @@ public class Obfuscator {
         launcher.addProcessor(new LocalVariableProcessor());
 
         launcher.run();
+        saveMappings();
+    }
+
+    /**
+     * Save all obfuscation mappings to a file for later deobfuscation
+     */
+    private static void saveMappings() {
+        ObfuscationMappings mappings = new ObfuscationMappings(
+            methodNameMapping,
+            parameterNameMapping,
+            localVarNameMapping
+        );
+
+        try {
+            File file = new File(MAPPING_FILE);
+            file.getParentFile().mkdirs();
+
+            try (FileOutputStream fos = new FileOutputStream(file);
+                 ObjectOutputStream oos = new ObjectOutputStream(fos)) {
+                oos.writeObject(mappings);
+                System.out.println("Obfuscation mappings saved to: " + file.getAbsolutePath());
+            }
+        } catch (IOException e) {
+            System.err.println("Error saving obfuscation mappings: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Container class to hold all obfuscation mappings
+     */
+    public static class ObfuscationMappings implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+        private final Map<String, String> methodMappings;
+        private final Map<String, Map<String, String>> parameterMappings;
+        private final Map<String, Map<String, String>> localVarMappings;
+
+        public ObfuscationMappings(
+                Map<String, String> methodMappings,
+                Map<String, Map<String, String>> parameterMappings,
+                Map<String, Map<String, String>> localVarMappings) {
+            this.methodMappings = methodMappings;
+            this.parameterMappings = parameterMappings;
+            this.localVarMappings = localVarMappings;
+        }
+
+        public Map<String, String> getMethodMappings() {
+            return methodMappings;
+        }
+
+        public Map<String, Map<String, String>> getParameterMappings() {
+            return parameterMappings;
+        }
+
+        public Map<String, Map<String, String>> getLocalVarMappings() {
+            return localVarMappings;
+        }
     }
 
     /**
@@ -144,7 +216,6 @@ public class Obfuscator {
      */
     private static class ParameterNameProcessor extends AbstractProcessor<CtParameter<?>> {
         private final Random random = new Random();
-        private final Map<String, Map<String, String>> methodToParamMappings = new HashMap<>();
 
         @Override
         public void process(CtParameter<?> parameter) {
@@ -160,8 +231,8 @@ public class Obfuscator {
             String methodSignature = method.getSignature();
             String originalName = parameter.getSimpleName();
 
-            methodToParamMappings.putIfAbsent(methodSignature, new HashMap<>());
-            Map<String, String> paramMapping = methodToParamMappings.get(methodSignature);
+            parameterNameMapping.putIfAbsent(methodSignature, new HashMap<>());
+            Map<String, String> paramMapping = parameterNameMapping.get(methodSignature);
 
             if (!paramMapping.containsKey(originalName)) {
                 String obfuscatedName = generateObfuscatedName();
@@ -207,7 +278,6 @@ public class Obfuscator {
      */
     private static class LocalVariableProcessor extends AbstractProcessor<CtLocalVariable<?>> {
         private final Random random = new Random();
-        private final Map<String, Map<String, String>> methodToVarMappings = new HashMap<>();
 
         @Override
         public void process(CtLocalVariable<?> localVar) {
@@ -219,8 +289,8 @@ public class Obfuscator {
             String methodSignature = method.getSignature();
             String originalName = localVar.getSimpleName();
 
-            methodToVarMappings.putIfAbsent(methodSignature, new HashMap<>());
-            Map<String, String> varMapping = methodToVarMappings.get(methodSignature);
+            localVarNameMapping.putIfAbsent(methodSignature, new HashMap<>());
+            Map<String, String> varMapping = localVarNameMapping.get(methodSignature);
 
             if (!varMapping.containsKey(originalName)) {
                 String obfuscatedName = generateObfuscatedName();
