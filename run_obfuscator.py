@@ -133,20 +133,18 @@ def generate_tests_with_llm(java_code_string, code_description):
     prompt = f'''You are an expert Java software developer specializing in writing comprehensive unit tests.
         Your task is to generate a complete JUnit 5 test class for the provided Java code.
         Instructions:
-        1. The test class should be fully self-contained and ready to compile.
-        2. IMPORTANT: Include all necessary imports for JUnit 5. You MUST include these specific imports:
-           `import org.junit.jupiter.api.*;` 
-           `import static org.junit.jupiter.api.Assertions.*;` 
-           `import source.Main;`
-        3. Generate test methods ONLY for the public methods that are explicitly defined in the provided Java code. Do not generate tests for methods that do not exist.
-        4. For methods with non-void return types, include assertions (e.g., `assertEquals`, `assertTrue`, `assertFalse`, `assertNotNull`, `assertThrows`) to check for expected outcomes. You may need to infer reasonable inputs and expected outputs based on the method's logic or name. Be very careful with the expected values in your assertions.
-        5. For void methods, try to test their behavior by checking for expected side effects if possible (though this might be hard without more context or mocking capabilities). At a minimum, ensure they can be called without throwing unexpected exceptions for basic valid inputs.
-        6. IMPORTANT: The test class MUST be named "{test_class_name}" (not any other name).
-        7. Pay attention to constructors and how objects of the class should be instantiated for testing.
-        8. Handle potential exceptions thrown by the methods under test using `assertThrows` where appropriate.
-        9. If a method is instance-based (non-static), make sure to create an instance of the class before calling the method (e.g., `Main main = new Main(); main.methodName();`).
-        10. If a method is static, you MUST call it on the class directly (e.g., `Main.methodName();`).
-        11. IMPORTANT: Provide only the Java code without any additional text or code fences. Do not include ```java or ``` markers, or any explanatory text.
+        1. The test class must be fully self-contained and ready to compile.
+        2. IMPORTANT: Include all necessary JUnit 5 imports: `import org.junit.jupiter.api.*;`, `import static org.junit.jupiter.api.Assertions.*;`, and `import source.Main;`.
+        3. For each public method in the provided code, generate EXACTLY 2 test methods:
+           a. A "positive" test case: This test should verify the method\'s functionality with valid, typical inputs where no errors or exceptions are expected. Use assertions like `assertEquals` or `assertTrue` to validate the outcome.
+           b. A "negative" or "edge case" test: This test should verify the method\'s behavior with invalid inputs or edge cases.
+              - **If the method can throw exceptions** (declared, documented, or clearly inferable like `NullPointerException` or division-by-zero `ArithmeticException`): Use `assertThrows` to test these exception scenarios. Do not invent unlikely exceptions. If multiple exceptions are possible, test them all in this one test method.
+              - **If the method does not throw exceptions**: Test it with edge-case inputs. Examples include `null`, empty arrays, zero, negative numbers, or boundary values like `Integer.MAX_VALUE`. The goal is to check for unexpected behavior or incorrect results.
+        4. Generate tests only for public methods explicitly defined in the provided code.
+        5. Use appropriate assertions (`assertEquals`, `assertTrue`, etc.) for methods with return values. For void methods, test for side effects or ensure they run without errors for valid inputs.
+        6. IMPORTANT: The test class MUST be named "{test_class_name}".
+        7. Handle object instantiation correctly (e.g., `Main main = new Main();`) for instance methods and call static methods directly on the class (e.g., `Main.methodName();`).
+        8. IMPORTANT: Provide only the raw Java code for the test class. Do not include markdown fences (```java) or any explanatory text.
 
         The Java code to test is as follows:
         ```java
@@ -650,15 +648,9 @@ if __name__ == "__main__":
     if names_test_code:
         names_test_file_path = "src/test/java/source/LLMGeneratedNamesTest.java"
         if save_test_to_file(names_test_code, names_test_file_path):
-            # Deobfuscate the names test in-place
             if deobfuscate_tests(names_test_file_path):
                 print(f"\n\n--- Running JUnit tests with deobfuscated LLM tests for names-obfuscated code ---")
                 success, names_test_results = run_tests()
-
-                # Compare with original test results if available
-                if original_test_results and names_test_results:
-                    print("\n\n--- Comparing Original vs Names-Obfuscated (Deobfuscated) Test Results ---")
-                    compare_test_results(original_test_results, names_test_results, "Names-Obfuscated (Deobfuscated)")
             else:
                 print("Failed to deobfuscate names tests. Skipping test execution.")
         else:
