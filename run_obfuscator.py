@@ -19,6 +19,8 @@ def clean_test_directory():
     actual_test_dir = os.path.join(base_path, test_dir)
 
     if not os.path.isdir(actual_test_dir):
+        os.makedirs(actual_test_dir, exist_ok=True)
+        print(f"Created test directory: {actual_test_dir}")
         return
 
     print(f"\n--- Cleaning test directory: {actual_test_dir} ---")
@@ -145,32 +147,35 @@ def generate_tests_with_llm(java_code_string, code_description, class_name):
     1. ONLY output valid Java code (no markdown, no explanations, no comments about what you're doing)
     2. Include package declaration: "package source;"
     3. Include these imports:
-       ```
        import org.junit.jupiter.api.*;
        import static org.junit.jupiter.api.Assertions.*;
        import source.{class_name};
-       ```
-    4. If the class has inner classes, also import them explicitly using the proper syntax:
-         ```
-         import source.{class_name}.InnerClassName;
-         ```
-    5. ONLY test methods that exist in the provided code. Here are the available public methods:
-    {method_list}
     
-    6. For each test method:
-       - Create a positive test with valid input
-       - Create a negative test with invalid input or edge cases
-       - Use proper assertions
+    4. If the class has inner classes, also import them explicitly using the proper syntax:
+       import source.{class_name}.InnerClassName;
+    
+    5. ONLY test methods that exist in the provided code. Here are the available public methods:
+{method_list}
+    
+    6. For each method in the class, create AT LEAST 2 test methods:
+       - One positive test with valid input demonstrating expected behavior
+       - One negative test with invalid input or edge cases
+       - Additional test cases for complex methods with multiple code paths
+       - Use proper assertions for each test
        - Handle exceptions correctly with try-catch or assertThrows
        - Do NOT access private fields
        - Do NOT create instances of private inner classes directly
        - Do NOT call methods that don't exist in the class
+       - Name your test methods clearly (e.g., testMethodName_validInput, testMethodName_invalidInput)
        
-    7. IMPORTANT: ONLY use public methods and constructors. Do not attempt to access:
-       - Private fields
-       - Protected methods
-       - Package-private methods
-       - Private constructors
+    7. IMPORTANT: CAREFULLY CHECK ACCESS MODIFIERS before attempting to use any class members:
+       - Do NOT access any private fields (this is not allowed in Java)
+       - Do NOT call any private constructors (if the constructor is private, you cannot instantiate directly)
+       - Do NOT access protected methods
+       - Do NOT access package-private methods
+       - ONLY use public methods and constructors
+       - Before using ANY member, check its modifier (public, private, protected, package-private)
+       - If you see the keyword "private" in the code, that means you CANNOT access that member directly
     
     8. IMPORTANT: For inner classes:
        - NEVER use syntax like 'objectInstance.new InnerClassName()' - this is invalid Java
@@ -178,14 +183,13 @@ def generate_tests_with_llm(java_code_string, code_description, class_name):
        - Inner class instances must be obtained through public methods that return them
        - If no method returns an inner class instance, then the inner class isn't meant to be directly tested
        - Use proper static nested class syntax if applicable: ClassName.StaticNestedClass
+       - NEVER try to instantiate an inner class directly if its constructor has private access
     
     9. IMPORTANT: Do NOT include any explanatory text or markdown - only output valid Java code
     10. IMPORTANT: Your response MUST start with "package source;" and be directly compilable
     
     The Java code to test is as follows:
-    ```java
-    {java_code_string}
-    ```
+{java_code_string}
     '''
 
     payload = {
