@@ -3,8 +3,11 @@ package com.obfuscationdemo;
 import spoon.Launcher;
 import spoon.processing.AbstractProcessor;
 import spoon.reflect.code.CtInvocation;
+import spoon.reflect.code.CtExecutableReferenceExpression;
+import spoon.reflect.code.CtFieldAccess;
 import spoon.reflect.declaration.CtMethod;
 import spoon.reflect.reference.CtExecutableReference;
+import spoon.reflect.reference.CtFieldReference;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -21,6 +24,8 @@ import java.util.Map;
 public class Deobfuscator {
     private static final String MAPPING_FILE = "build/obfuscation-mapping.ser";
     private Map<String, String> reverseMethodMapping = new HashMap<>();
+    private Map<String, String> reverseTypeMapping = new HashMap<>();
+    private Map<String, Map<String, String>> reverseFieldMapping = new HashMap<>();
 
     public static void main(String[] args) {
         if (args.length == 0) {
@@ -68,6 +73,51 @@ public class Deobfuscator {
                 reverseMethodMapping.put(obfuscatedName, originalName);
             }
 
+            // Create reverse type mappings (obfuscated -> original) if available
+            try {
+                Map<String, String> typeMappings = mappings.getTypeMappings();
+                if (typeMappings != null) {
+                    for (Map.Entry<String, String> entry : typeMappings.entrySet()) {
+                        String originalName = entry.getKey();
+                        String obfuscatedName = entry.getValue();
+                        reverseTypeMapping.put(obfuscatedName, originalName);
+                    }
+                    System.out.println("Loaded " + reverseTypeMapping.size() + " type name mappings");
+                }
+            } catch (Exception e) {
+                System.out.println("No type mappings found in obfuscation data");
+            }
+
+            // Create reverse field mappings (obfuscated -> original)
+            try {
+                Map<String, Map<String, String>> fieldMappings = mappings.getFieldMappings();
+                if (fieldMappings != null) {
+                    for (Map.Entry<String, Map<String, String>> classEntry : fieldMappings.entrySet()) {
+                        String className = classEntry.getKey();
+                        Map<String, String> fieldMap = classEntry.getValue();
+
+                        // Create reverse mapping for this class
+                        Map<String, String> reverseFieldsForClass = new HashMap<>();
+                        reverseFieldMapping.put(className, reverseFieldsForClass);
+
+                        // Fill the reverse mapping
+                        for (Map.Entry<String, String> fieldEntry : fieldMap.entrySet()) {
+                            String originalFieldName = fieldEntry.getKey();
+                            String obfuscatedFieldName = fieldEntry.getValue();
+                            reverseFieldsForClass.put(obfuscatedFieldName, originalFieldName);
+                        }
+                    }
+
+                    int totalFields = reverseFieldMapping.values().stream()
+                        .mapToInt(map -> map.size())
+                        .sum();
+                    System.out.println("Loaded " + totalFields + " field name mappings for " +
+                                       reverseFieldMapping.size() + " classes");
+                }
+            } catch (Exception e) {
+                System.out.println("No field mappings found in obfuscation data: " + e.getMessage());
+            }
+
             System.out.println("Loaded " + reverseMethodMapping.size() + " method name mappings");
             return true;
 
@@ -80,7 +130,7 @@ public class Deobfuscator {
 
     /**
      * Deobfuscate a test file by replacing obfuscated method names with original names.
-     * The modification is done in-place.
+     * The modification is done in-place using Spoon's AST transformations.
      */
     public void deobfuscateTestFile(String inputFile) {
         System.out.println("Processing test file with Spoon (in-place)...");
@@ -89,13 +139,22 @@ public class Deobfuscator {
             launcher.addInputResource(inputFile);
             // Set the output directory to the root of the test source to avoid nested package dirs
             launcher.setSourceOutputDirectory(Paths.get(inputFile).getParent().getParent().toFile());
-            launcher.getEnvironment().setAutoImports(true);
-            launcher.getEnvironment().setNoClasspath(true); // Avoids issues with classpath resolution
-
+            
+            // Set compilation and environment options
+            launcher.getEnvironment().setComplianceLevel(17); // Ensure Java 17 compatibility
+            launcher.getEnvironment().setCommentEnabled(true); // Preserve comments
+            launcher.getEnvironment().setAutoImports(false);  // Don't modify imports
+            launcher.getEnvironment().setNoClasspath(true);   // Avoid classpath issues
+            
+            // Add all processors for deobfuscation
             launcher.addProcessor(new MethodInvocationDeobfuscator(reverseMethodMapping));
             launcher.addProcessor(new TestMethodNameDeobfuscator(reverseMethodMapping));
+            launcher.addProcessor(new MethodReferenceDeobfuscator(reverseMethodMapping));
+            launcher.addProcessor(new MethodAccessInBodyDeobfuscator(reverseMethodMapping));
+            launcher.addProcessor(new FieldAccessDeobfuscator(reverseFieldMapping));
 
             launcher.run();
+            
             System.out.println("Deobfuscation completed! The file has been updated: " + inputFile);
         } catch (Exception e) {
             System.err.println("Error during deobfuscation: " + e.getMessage());
@@ -165,6 +224,103 @@ public class Deobfuscator {
                 return str;
             }
             return Character.toUpperCase(str.charAt(0)) + str.substring(1);
+        }
+    }
+
+    /**
+     * Processor to replace obfuscated method names in method references (:: syntax)
+     */
+    private static class MethodReferenceDeobfuscator extends AbstractProcessor<CtExecutableReferenceExpression<?, ?>> {
+        private final Map<String, String> reverseMethodMapping;
+
+        public MethodReferenceDeobfuscator(Map<String, String> reverseMethodMapping) {
+            this.reverseMethodMapping = reverseMethodMapping;
+        }
+
+        @Override
+        public void process(CtExecutableReferenceExpression<?, ?> reference) {
+            CtExecutableReference<?> execRef = reference.getExecutable();
+            String methodName = execRef.getSimpleName();
+
+            if (reverseMethodMapping.containsKey(methodName)) {
+                String originalName = reverseMethodMapping.get(methodName);
+                execRef.setSimpleName(originalName);
+                System.out.println("Replaced method reference: " + methodName + " -> " + originalName);
+            }
+        }
+    }
+
+    /**
+     * Processor to handle method names in method bodies, including lambda expressions
+     * and nested method calls that might not be caught by other processors.
+     */
+    private static class MethodAccessInBodyDeobfuscator extends AbstractProcessor<CtMethod<?>> {
+        private final Map<String, String> reverseMethodMapping;
+        
+        public MethodAccessInBodyDeobfuscator(Map<String, String> reverseMethodMapping) {
+            this.reverseMethodMapping = reverseMethodMapping;
+        }
+        
+        @Override
+        public void process(CtMethod<?> method) {
+            if (method.getBody() == null) {
+                return;
+            }
+
+            // Process the body as a string representation to find potential method references
+            String body = method.getBody().toString();
+            boolean hasObfuscatedMethods = false;
+            
+            for (String obfuscatedMethod : reverseMethodMapping.keySet()) {
+                if (body.contains(obfuscatedMethod)) {
+                    hasObfuscatedMethods = true;
+                    System.out.println("Method body of " + method.getSimpleName() + 
+                                      " contains potential obfuscated method: " + obfuscatedMethod);
+                }
+            }
+            
+            if (hasObfuscatedMethods) {
+                // Log that we found potential obfuscated methods but didn't replace directly
+                System.out.println("Note: Some obfuscated methods in " + method.getSimpleName() + 
+                                  " may require special handling. Direct string replacement is disabled.");
+            }
+        }
+    }
+
+    /**
+     * Processor to replace obfuscated field names with original names in field accesses
+     */
+    private static class FieldAccessDeobfuscator extends AbstractProcessor<CtFieldAccess<?>> {
+        private final Map<String, Map<String, String>> reverseFieldMapping;
+
+        public FieldAccessDeobfuscator(Map<String, Map<String, String>> reverseFieldMapping) {
+            this.reverseFieldMapping = reverseFieldMapping;
+        }
+
+        @Override
+        public void process(CtFieldAccess<?> fieldAccess) {
+            CtFieldReference<?> fieldRef = fieldAccess.getVariable();
+            String fieldName = fieldRef.getSimpleName();
+
+            // Skip if there's no declaring type (which shouldn't happen for a field access)
+            if (fieldRef.getDeclaringType() == null) {
+                return;
+            }
+
+            String className = fieldRef.getDeclaringType().getQualifiedName();
+
+            // Look for the class in our field mapping
+            if (reverseFieldMapping.containsKey(className)) {
+                Map<String, String> fieldsForClass = reverseFieldMapping.get(className);
+
+                // Check if this field name is in the mapping
+                if (fieldsForClass.containsKey(fieldName)) {
+                    String originalName = fieldsForClass.get(fieldName);
+                    fieldRef.setSimpleName(originalName);
+                    System.out.println("Replaced field access: " + fieldName + " -> " + originalName +
+                                      " in class " + className);
+                }
+            }
         }
     }
 }
