@@ -6,10 +6,11 @@ import json
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
+import argparse
 
 # --- Constants for Ollama API ---
 OLLAMA_API_URL = "http://rhaegal.dimis.fim.uni-passau.de:15343/api/generate"
-OLLAMA_MODEL_NAME = "codellama:7b"
+OLLAMA_MODEL_NAME = "devstral:24b-small-2505-q8_0"
 
 def clean_test_directory():
     """Deletes all generated test files from the test directory to prevent conflicts."""
@@ -22,7 +23,7 @@ def clean_test_directory():
 
     print(f"\n--- Cleaning test directory: {actual_test_dir} ---")
     for filename in os.listdir(actual_test_dir):
-        if filename.startswith("LLMGenerated") and filename.endswith(".java"):
+        if filename.endswith(".java"):
             try:
                 os.remove(os.path.join(actual_test_dir, filename))
                 print(f"Removed old test file: {filename}")
@@ -103,7 +104,12 @@ def get_and_print_code(file_path_from_project_root, description):
         print(f"Error reading {description} file {actual_file_path}: {e}")
     return content
 
-def generate_tests_with_llm(java_code_string, code_description):
+def extract_public_methods(java_code_string):
+    """Extracts public method names from the provided Java code."""
+    method_pattern = r'public\s+[^\s]+\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\('
+    return re.findall(method_pattern, java_code_string)
+
+def generate_tests_with_llm(java_code_string, code_description, class_name):
     """Sends Java code to the Ollama API and prints the generated JUnit tests."""
     if not java_code_string:
         print(f"No Java code provided for '{code_description}'. Skipping test generation.")
@@ -113,46 +119,74 @@ def generate_tests_with_llm(java_code_string, code_description):
     print(f"(Using model: {OLLAMA_MODEL_NAME} at {OLLAMA_API_URL}))")
     print("Please ensure you are connected to the university VPN.")
 
-    class_name = "UnknownClass"
-    try:
-        lines = java_code_string.splitlines()
-        for line in lines:
-            if "public class" in line:
-                class_name = line.split("public class")[1].split("{")[0].strip()
-                break
-    except Exception:
-        pass
-
     # Generate a specific test class name based on the obfuscation type
-    test_class_name = "LLMGeneratedMainTest"
+    test_class_name = f"LLMGenerated{class_name}Test"
     if "bodies" in code_description.lower():
-        test_class_name = "LLMGeneratedBodiesTest"
+        test_class_name = f"LLMGenerated{class_name}BodiesTest"
     elif "names" in code_description.lower():
-        test_class_name = "LLMGeneratedNamesTest"
+        test_class_name = f"LLMGenerated{class_name}NamesTest"
 
-    prompt = f'''You are an expert Java software developer specializing in writing comprehensive unit tests.
-        Your task is to generate a complete JUnit 5 test class for the provided Java code.
-        Instructions:
-        1. The test class must be fully self-contained and ready to compile.
-        2. IMPORTANT: Include all necessary JUnit 5 imports: `import org.junit.jupiter.api.*;`, `import static org.junit.jupiter.api.Assertions.*;`, and `import source.Main;`.
-        3. For each public method in the provided code, generate EXACTLY 2 test methods:
-           a. A "positive" test case: This test should verify the method\'s functionality with valid, typical inputs where no errors or exceptions are expected. Use assertions like `assertEquals` or `assertTrue` to validate the outcome.
-           b. A "negative" or "edge case" test: This test should verify the method\'s behavior with invalid inputs or edge cases.
-              - **If the method can throw exceptions** (declared, documented, or clearly inferable like `NullPointerException` or division-by-zero `ArithmeticException`): Use `assertThrows` to test these exception scenarios. Do not invent unlikely exceptions. If multiple exceptions are possible, test them all in this one test method.
-              - **If the method does not throw exceptions**: Test it with edge-case inputs. Examples include `null`, empty arrays, zero, negative numbers, or boundary values like `Integer.MAX_VALUE`. The goal is to check for unexpected behavior or incorrect results.
-        4. Generate tests only for public methods explicitly defined in the provided code.
-        5. Use appropriate assertions (`assertEquals`, `assertTrue`, etc.) for methods with return values. For void methods, test for side effects or ensure they run without errors for valid inputs.
-        6. IMPORTANT: The test class MUST be named "{test_class_name}".
-        7. Handle object instantiation correctly (e.g., `Main main = new Main();`) for instance methods and call static methods directly on the class (e.g., `Main.methodName();`).
-        8. IMPORTANT: Provide only the raw Java code for the test class. Do not include markdown fences (```java) or any explanatory text.
+    # Extract all public method names from the Java code to provide to LLM
+    method_names = extract_public_methods(java_code_string)
+    method_list = "\n".join([f"- {method}" for method in method_names])
 
-        The Java code to test is as follows:
-        ```java
-        {java_code_string}
-        ```
 
-        Provide only the Java code for the test class.
-        '''
+    prompt = f'''    
+    You are an expert Java developer tasked with creating JUnit 5 tests.
+    
+    TASK: Write a valid JUnit 5 test class for the provided Java code. The test class MUST be directly compilable without any modifications.
+    
+    CONTEXT:
+    - The class being tested is: {class_name} 
+    - Your test class name MUST be: {test_class_name}
+    - The code is in package: source
+    
+    REQUIREMENTS:
+    1. ONLY output valid Java code (no markdown, no explanations, no comments about what you're doing)
+    2. Include package declaration: "package source;"
+    3. Include these imports:
+       ```
+       import org.junit.jupiter.api.*;
+       import static org.junit.jupiter.api.Assertions.*;
+       import source.{class_name};
+       ```
+    4. If the class has inner classes, also import them explicitly using the proper syntax:
+         ```
+         import source.{class_name}.InnerClassName;
+         ```
+    5. ONLY test methods that exist in the provided code. Here are the available public methods:
+    {method_list}
+    
+    6. For each test method:
+       - Create a positive test with valid input
+       - Create a negative test with invalid input or edge cases
+       - Use proper assertions
+       - Handle exceptions correctly with try-catch or assertThrows
+       - Do NOT access private fields
+       - Do NOT create instances of private inner classes directly
+       - Do NOT call methods that don't exist in the class
+       
+    7. IMPORTANT: ONLY use public methods and constructors. Do not attempt to access:
+       - Private fields
+       - Protected methods
+       - Package-private methods
+       - Private constructors
+    
+    8. IMPORTANT: For inner classes:
+       - NEVER use syntax like 'objectInstance.new InnerClassName()' - this is invalid Java
+       - If you need to test code that involves inner classes, only use public methods that return instances of those inner classes
+       - Inner class instances must be obtained through public methods that return them
+       - If no method returns an inner class instance, then the inner class isn't meant to be directly tested
+       - Use proper static nested class syntax if applicable: ClassName.StaticNestedClass
+    
+    9. IMPORTANT: Do NOT include any explanatory text or markdown - only output valid Java code
+    10. IMPORTANT: Your response MUST start with "package source;" and be directly compilable
+    
+    The Java code to test is as follows:
+    ```java
+    {java_code_string}
+    ```
+    '''
 
     payload = {
         "model": OLLAMA_MODEL_NAME,
@@ -241,6 +275,11 @@ def ensure_junit_imports(code_text):
 
 def clean_generated_code(code_text):
     """Clean up the LLM-generated code by removing markdown and explanatory text."""
+    package_pos = code_text.find("package ")
+    if package_pos != -1:
+        # If "package " is found, strip everything before it
+        code_text = code_text[package_pos:]
+
     # Remove markdown code blocks
     code_text = re.sub(r'^```java\s*', '', code_text, flags=re.MULTILINE)
     code_text = re.sub(r'^```\s*', '', code_text, flags=re.MULTILINE)
@@ -280,6 +319,7 @@ def save_test_to_file(test_code, test_file_path):
 
         # Extract the expected class name from the file path
         expected_class_name = os.path.splitext(os.path.basename(test_file_path))[0]
+        class_name_to_import = expected_class_name.replace("LLMGenerated", "").replace("Test", "").replace("Bodies", "").replace("Names", "")
 
         # Replace class declaration to match the file name
         # This ensures the class is named properly regardless of what the LLM generated
@@ -287,7 +327,7 @@ def save_test_to_file(test_code, test_file_path):
         test_code = re.sub(class_pattern, f'class {expected_class_name}', test_code)
 
         # Ensure source.Main is imported
-        if 'import source.Main;' not in test_code:
+        if f'import source.{class_name_to_import};' not in test_code:
             # Find where to insert the import
             import_position = 0
             lines = test_code.splitlines()
@@ -299,7 +339,7 @@ def save_test_to_file(test_code, test_file_path):
                     break
 
             # Insert the import
-            lines.insert(import_position, 'import source.Main;')
+            lines.insert(import_position, f'import source.{class_name_to_import};')
             test_code = '\n'.join(lines)
 
         with open(actual_file_path, 'w') as f:
@@ -574,6 +614,18 @@ def deobfuscate_tests(test_file_path):
             print(f"Error: Deobfuscation process failed with return code {process.returncode}.")
             return False
 
+        # Print the content of the deobfuscated test file
+        base_path = "/app" if os.path.exists("/.dockerenv") else "."
+        actual_file_path = os.path.join(base_path, test_file_path)
+        try:
+            with open(actual_file_path, 'r') as f:
+                deobfuscated_content = f.read()
+                print(f"\n--- Deobfuscated Test File Content ---")
+                print(deobfuscated_content)
+                print(f"--- End of Deobfuscated Test File Content ---\n")
+        except Exception as e:
+            print(f"Warning: Could not read deobfuscated test file: {e}")
+
         return True
 
     except subprocess.CalledProcessError as e:
@@ -585,32 +637,184 @@ def deobfuscate_tests(test_file_path):
         print(f"An unexpected error occurred during deobfuscation: {e}")
         return False
 
+def print_test_comparison_table(original_results, bodies_results, names_results):
+    """Print a table comparing all test results side by side."""
+
+    if not original_results and not bodies_results and not names_results:
+        print("No test results available for comparison.")
+        return
+
+    print("\n")
+    print("=" * 120)
+    print(f"{'DETAILED TEST COMPARISON TABLE':^120}")
+    print("=" * 120)
+
+    # Define table headers
+    headers = ["Metric", "Original", "Bodies Obfuscated", "Names Obfuscated"]
+
+    # Calculate column widths
+    col_width = 30
+    header_format = f"{{:<{col_width}}}{{:<{col_width}}}{{:<{col_width}}}{{:<{col_width}}}"
+
+    # Print table headers
+    print(header_format.format(*headers))
+    print("-" * 120)
+
+    # Basic metrics to compare
+    metrics = [
+        "Total Tests",
+        "Passed Tests",
+        "Failed Tests",
+        "Skipped Tests",
+        "Pass Rate (%)",
+        "Total Execution Time (s)"
+    ]
+
+    # Print metrics row by row
+    for metric in metrics:
+        original_value = get_metric_value(original_results, metric)
+        bodies_value = get_metric_value(bodies_results, metric)
+        names_value = get_metric_value(names_results, metric)
+
+        print(header_format.format(
+            metric,
+            format_metric_value(original_value, metric),
+            format_metric_value(bodies_value, metric),
+            format_metric_value(names_value, metric)
+        ))
+
+    print("-" * 120)
+
+    # Test coverage comparison - only if all results are available
+    if original_results and bodies_results and names_results:
+        # Get test methods
+        original_methods = set([f"{test['name']}" for test in original_results['tests']])
+        bodies_methods = set([f"{test['name']}" for test in bodies_results['tests']])
+        names_methods = set([f"{test['name']}" for test in names_results['tests']])
+
+        # All unique test methods
+        all_methods = original_methods.union(bodies_methods).union(names_methods)
+
+        # Print test method coverage
+        print(f"\n{'Test Method Coverage:':^120}")
+        print("-" * 120)
+        test_format = f"{{:<{col_width}}}{{:^{col_width}}}{{:^{col_width}}}{{:^{col_width}}}"
+        print(test_format.format("Test Method", "Original", "Bodies Obfuscated", "Names Obfuscated"))
+        print("-" * 120)
+
+        for method in sorted(all_methods):
+            in_original = "✓" if method in original_methods else "✗"
+            in_bodies = "✓" if method in bodies_methods else "✗"
+            in_names = "✓" if method in names_methods else "✗"
+
+            print(test_format.format(method, in_original, in_bodies, in_names))
+
+    print("=" * 120)
+
+    # Additional analysis on which version performed better
+    print(f"\n{'SUMMARY ANALYSIS':^120}")
+    print("-" * 120)
+
+    if original_results and bodies_results:
+        bodies_pass_rate = bodies_results['passed'] / bodies_results['total'] * 100 if bodies_results['total'] > 0 else 0
+        original_pass_rate = original_results['passed'] / original_results['total'] * 100 if original_results['total'] > 0 else 0
+
+        if bodies_pass_rate > original_pass_rate:
+            print(f"* Bodies-obfuscated version has a higher pass rate ({bodies_pass_rate:.1f}%) than original ({original_pass_rate:.1f}%)")
+        elif bodies_pass_rate < original_pass_rate:
+            print(f"* Original version has a higher pass rate ({original_pass_rate:.1f}%) than bodies-obfuscated ({bodies_pass_rate:.1f}%)")
+        else:
+            print(f"* Original and bodies-obfuscated versions have the same pass rate ({original_pass_rate:.1f}%)")
+
+    if original_results and names_results:
+        names_pass_rate = names_results['passed'] / names_results['total'] * 100 if names_results['total'] > 0 else 0
+        original_pass_rate = original_results['passed'] / original_results['total'] * 100 if original_results['total'] > 0 else 0
+
+        if names_pass_rate > original_pass_rate:
+            print(f"* Names-obfuscated version has a higher pass rate ({names_pass_rate:.1f}%) than original ({original_pass_rate:.1f}%)")
+        elif names_pass_rate < original_pass_rate:
+            print(f"* Original version has a higher pass rate ({original_pass_rate:.1f}%) than names-obfuscated ({names_pass_rate:.1f}%)")
+        else:
+            print(f"* Original and names-obfuscated versions have the same pass rate ({original_pass_rate:.1f}%)")
+
+    if bodies_results and names_results:
+        bodies_pass_rate = bodies_results['passed'] / bodies_results['total'] * 100 if bodies_results['total'] > 0 else 0
+        names_pass_rate = names_results['passed'] / names_results['total'] * 100 if names_results['total'] > 0 else 0
+
+        if bodies_pass_rate > names_pass_rate:
+            print(f"* Bodies-obfuscated version has a higher pass rate ({bodies_pass_rate:.1f}%) than names-obfuscated ({names_pass_rate:.1f}%)")
+        elif bodies_pass_rate < names_pass_rate:
+            print(f"* Names-obfuscated version has a higher pass rate ({names_pass_rate:.1f}%) than bodies-obfuscated ({bodies_pass_rate:.1f}%)")
+        else:
+            print(f"* Bodies and names-obfuscated versions have the same pass rate ({bodies_pass_rate:.1f}%)")
+
+    print("=" * 120)
+
+def get_metric_value(results, metric):
+    """Extract the metric value from test results."""
+    if not results:
+        return None
+
+    if metric == "Total Tests":
+        return results['total']
+    elif metric == "Passed Tests":
+        return results['passed']
+    elif metric == "Failed Tests":
+        return results['failed']
+    elif metric == "Skipped Tests":
+        return results['skipped']
+    elif metric == "Pass Rate (%)":
+        return results['passed'] / results['total'] * 100 if results['total'] > 0 else 0
+    elif metric == "Total Execution Time (s)":
+        return results['total_time']
+    return None
+
+def format_metric_value(value, metric):
+    """Format the metric value for display."""
+    if value is None:
+        return "N/A"
+
+    if metric in ["Pass Rate (%)", "Total Execution Time (s)"]:
+        return f"{value:.2f}"
+    else:
+        return str(value)
+
 if __name__ == "__main__":
-    original_main_java_path = "src/main/java/source/Main.java"
+    parser = argparse.ArgumentParser(description="Obfuscate a Java class and generate/run tests.")
+    parser.add_argument('--class_name', type=str, default='Main', help='The name of the class to process (e.g., Main, StopWatch).')
+    args = parser.parse_args()
+    class_name = args.class_name
+
+    # Clean the build directory once at the beginning
+    print("\n--- Performing initial clean of the build directory ---")
+    subprocess.run(["./gradlew", "clean", "--console=plain"], capture_output=True, text=True)
+
+    original_java_path = f"src/main/java/source/{class_name}.java"
     print(f"\n--- Processing: Original Source File ---")
-    original_code_content = get_and_print_code(original_main_java_path, "Original Main.java")
+    original_code_content = get_and_print_code(original_java_path, f"Original {class_name}.java")
     generated_test_code = None
     bodies_test_code = None
     names_code_content = None
+    names_test_code = None
 
     if original_code_content:
-        generated_test_code = generate_tests_with_llm(original_code_content, "Original Main.java")
+        generated_test_code = generate_tests_with_llm(original_code_content, f"Original {class_name}.java", class_name)
 
-    print("\n\n--- Processing: 'bodies' Obfuscation (name changes + body removal) ---")
+    print(f"\n\n--- Processing: 'bodies' Obfuscation (name changes + body removal) ---")
     if execute_gradle_obfuscation("obfuscated-source-bodies", "bodies"):
-        obfuscated_bodies_path = "build/obfuscated-source-bodies/source/Main.java"
-        bodies_code_content = get_and_print_code(obfuscated_bodies_path, "Bodies Obfuscated Main.java")
+        obfuscated_bodies_path = f"build/obfuscated-source-bodies/source/{class_name}.java"
+        bodies_code_content = get_and_print_code(obfuscated_bodies_path, f"Bodies Obfuscated {class_name}.java")
         if bodies_code_content:
-            bodies_test_code = generate_tests_with_llm(bodies_code_content, "Bodies Obfuscated Main.java")
+            bodies_test_code = generate_tests_with_llm(bodies_code_content, f"Bodies Obfuscated {class_name}.java", class_name)
     else:
         print("Obfuscation process for 'bodies' failed. Skipping test generation for this version.")
 
-    print("\n\n--- Processing: 'names' Obfuscation (method and variable name changes) ---")
+    print(f"\n\n--- Processing: 'names' Obfuscation (method and variable name changes) ---")
     if execute_gradle_obfuscation("obfuscated-source-names", "names"):
-        obfuscated_names_path = "build/obfuscated-source-names/source/Main.java"
-        names_code_content = get_and_print_code(obfuscated_names_path, "Names Obfuscated Main.java")
+        obfuscated_names_path = f"build/obfuscated-source-names/source/{class_name}.java"
+        names_code_content = get_and_print_code(obfuscated_names_path, f"Names Obfuscated {class_name}.java")
         if names_code_content:
-            names_test_code = generate_tests_with_llm(names_code_content, "Names Obfuscated Main.java")
+            names_test_code = generate_tests_with_llm(names_code_content, f"Names Obfuscated {class_name}.java", class_name)
     else:
         print("Obfuscation process for 'names' failed. Skipping test generation for this version.")
 
@@ -622,31 +826,31 @@ if __name__ == "__main__":
     # Save the generated test from the original code to a file if it was generated
     clean_test_directory()
     if generated_test_code:
-        test_file_path = "src/test/java/source/LLMGeneratedMainTest.java"
+        test_file_path = f"src/test/java/source/LLMGenerated{class_name}Test.java"
         if save_test_to_file(generated_test_code, test_file_path):
-            print("\n\n--- Running JUnit tests with LLM generated tests for original code ---")
+            print(f"\n\n--- Running JUnit tests with LLM generated tests for original code ---")
             success, original_test_results = run_tests()
         else:
             print("Failed to save generated tests. Skipping test execution.")
     else:
-        print("\nNo test code was generated for original code. Skipping test execution.")
+        print(f"\nNo test code was generated for original code. Skipping test execution.")
 
     # Save the generated test from the bodies-obfuscated code to a file if it was generated
     clean_test_directory()
     if bodies_test_code:
-        test_file_path = "src/test/java/source/LLMGeneratedBodiesTest.java"
+        test_file_path = f"src/test/java/source/LLMGenerated{class_name}BodiesTest.java"
         if save_test_to_file(bodies_test_code, test_file_path):
-            print("\n\n--- Running JUnit tests with LLM generated tests for bodies-obfuscated code ---")
+            print(f"\n\n--- Running JUnit tests with LLM generated tests for bodies-obfuscated code ---")
             success, bodies_test_results = run_tests()
         else:
             print("Failed to save generated tests for bodies-obfuscated code. Skipping test execution.")
     else:
-        print("\nNo test code was generated for bodies-obfuscated code. Skipping test execution.")
+        print(f"\nNo test code was generated for bodies-obfuscated code. Skipping test execution.")
 
     # Save the generated test from the names-obfuscated code to a file if it was generated
     clean_test_directory()
     if names_test_code:
-        names_test_file_path = "src/test/java/source/LLMGeneratedNamesTest.java"
+        names_test_file_path = f"src/test/java/source/LLMGenerated{class_name}NamesTest.java"
         if save_test_to_file(names_test_code, names_test_file_path):
             if deobfuscate_tests(names_test_file_path):
                 print(f"\n\n--- Running JUnit tests with deobfuscated LLM tests for names-obfuscated code ---")
@@ -656,13 +860,15 @@ if __name__ == "__main__":
         else:
             print("Failed to save generated tests for names-obfuscated code. Skipping test execution.")
     else:
-        print("\nNo test code was generated for names-obfuscated code. Skipping test execution.")
+        print(f"\nNo test code was generated for names-obfuscated code. Skipping test execution.")
 
     # Compare test results if both are available
     if original_test_results and bodies_test_results:
-        compare_test_results(original_test_results, bodies_test_results, "Bodies-Obfuscated")
+        compare_test_results(original_test_results, bodies_test_results, "Bodies Obfuscated")
 
     if original_test_results and names_test_results:
-        compare_test_results(original_test_results, names_test_results, "Names-Obfuscated (Deobfuscated)")
+        compare_test_results(original_test_results, names_test_results, "Names Obfuscated")
 
-    print("\n\n--- Script Finished ---")
+    # Print comprehensive table comparing all three test results
+    print_test_comparison_table(original_test_results, bodies_test_results, names_test_results)
+
