@@ -8,6 +8,7 @@ import spoon.reflect.factory.Factory;
 import spoon.reflect.reference.CtExecutableReference;
 import spoon.reflect.reference.CtTypeReference;
 import spoon.reflect.reference.CtVariableReference;
+import spoon.reflect.reference.CtFieldReference;
 import spoon.reflect.visitor.filter.TypeFilter;
 
 import java.io.File;
@@ -26,6 +27,7 @@ public class Obfuscator {
     private static final Map<String, String> methodNameMapping = new HashMap<>();
     private static final Map<String, Map<String, String>> parameterNameMapping = new HashMap<>();
     private static final Map<String, Map<String, String>> localVarNameMapping = new HashMap<>();
+    private static final Map<String, Map<String, String>> fieldNameMapping = new HashMap<>();
 
     public static void main(String[] args) {
         String inputDir = args.length > 0 ? args[0] : "src/main/java/source";
@@ -66,11 +68,14 @@ public class Obfuscator {
         methodNameMapping.clear();
         parameterNameMapping.clear();
         localVarNameMapping.clear();
+        fieldNameMapping.clear();
 
         launcher.addProcessor(new MethodNameObfuscationProcessor(methodNameMapping));
         launcher.addProcessor(new MethodInvocationProcessor(methodNameMapping));
         launcher.addProcessor(new ParameterNameProcessor());
         launcher.addProcessor(new LocalVariableProcessor());
+        launcher.addProcessor(new FieldNameProcessor());
+        launcher.addProcessor(new CommentRemovalProcessor());
 
         launcher.run();
         saveMappings();
@@ -83,7 +88,8 @@ public class Obfuscator {
         ObfuscationMappings mappings = new ObfuscationMappings(
             methodNameMapping,
             parameterNameMapping,
-            localVarNameMapping
+            localVarNameMapping,
+            fieldNameMapping
         );
 
         try {
@@ -110,14 +116,19 @@ public class Obfuscator {
         private final Map<String, String> methodMappings;
         private final Map<String, Map<String, String>> parameterMappings;
         private final Map<String, Map<String, String>> localVarMappings;
+        private final Map<String, String> typeMappings;
+        private final Map<String, Map<String, String>> fieldMappings;
 
         public ObfuscationMappings(
                 Map<String, String> methodMappings,
                 Map<String, Map<String, String>> parameterMappings,
-                Map<String, Map<String, String>> localVarMappings) {
+                Map<String, Map<String, String>> localVarMappings,
+                Map<String, Map<String, String>> fieldMappings) {
             this.methodMappings = methodMappings;
             this.parameterMappings = parameterMappings;
             this.localVarMappings = localVarMappings;
+            this.typeMappings = new HashMap<>();
+            this.fieldMappings = fieldMappings;
         }
 
         public Map<String, String> getMethodMappings() {
@@ -130,6 +141,14 @@ public class Obfuscator {
 
         public Map<String, Map<String, String>> getLocalVarMappings() {
             return localVarMappings;
+        }
+
+        public Map<String, String> getTypeMappings() {
+            return typeMappings;
+        }
+
+        public Map<String, Map<String, String>> getFieldMappings() {
+            return fieldMappings;
         }
     }
 
@@ -150,7 +169,15 @@ public class Obfuscator {
      * Run all available obfuscations
      */
     private static void runAllObfuscations(String inputDir, String outputDir) {
-        runBodyRemovalObfuscation(inputDir, outputDir);
+        // First run name obfuscation
+        runNameObfuscation(inputDir, outputDir);
+
+        // Then run method body removal on the already obfuscated code
+        Launcher launcher = new Launcher();
+        launcher.setSourceOutputDirectory(outputDir);
+        launcher.addInputResource(outputDir);
+        launcher.addProcessor(new MethodBodyRemovalProcessor());
+        launcher.run();
     }
 
     /**
@@ -389,6 +416,72 @@ public class Obfuscator {
     }
 
     /**
+     * Processor specifically for handling class fields/properties
+     */
+    private static class FieldNameProcessor extends AbstractProcessor<CtField<?>> {
+        private final Random random = new Random();
+
+        @Override
+        public void process(CtField<?> field) {
+            // Get the class containing this field
+            CtType<?> declaringType = field.getDeclaringType();
+            if (declaringType == null) {
+                return;
+            }
+
+            // Skip static final fields (likely constants)
+            if (field.isStatic() && field.isFinal()) {
+                return;
+            }
+
+            String className = declaringType.getQualifiedName();
+            String originalName = field.getSimpleName();
+
+            // Initialize mapping for this class if it doesn't exist
+            fieldNameMapping.putIfAbsent(className, new HashMap<>());
+            Map<String, String> classFieldMapping = fieldNameMapping.get(className);
+
+            // Generate or reuse obfuscated name
+            if (!classFieldMapping.containsKey(originalName)) {
+                String obfuscatedName = generateObfuscatedName();
+                classFieldMapping.put(originalName, obfuscatedName);
+            }
+
+            String obfuscatedName = classFieldMapping.get(originalName);
+            field.setSimpleName(obfuscatedName);
+
+            // Find and update all field accesses in the class
+            for (CtFieldReference<?> fieldRef : declaringType.getElements(new TypeFilter<>(CtFieldReference.class))) {
+                if (fieldRef.getSimpleName().equals(originalName) && fieldRef.getDeclaringType() != null &&
+                    fieldRef.getDeclaringType().getQualifiedName().equals(className)) {
+                    fieldRef.setSimpleName(obfuscatedName);
+                }
+            }
+        }
+
+        private String generateObfuscatedName() {
+            StringBuilder name = new StringBuilder("f");
+            int length = 5 + random.nextInt(10);
+            for (int i = 0; i < length; i++) {
+                name.append((char) ('a' + random.nextInt(26)));
+            }
+            return name.toString();
+        }
+    }
+
+    /**
+     * Processor to remove all comments (including JavaDoc, line comments, block comments)
+     */
+    private static class CommentRemovalProcessor extends AbstractProcessor<CtElement> {
+
+        @Override
+        public void process(CtElement element) {
+            // Remove all comments from the element
+            element.setComments(new java.util.ArrayList<>());
+        }
+    }
+
+    /**
      * Processor to remove method bodies but keep JavaDoc
      */
     private static class MethodBodyRemovalProcessor extends AbstractProcessor<CtMethod<?>> {
@@ -420,13 +513,6 @@ public class Obfuscator {
 
                 emptyBlock.addStatement(returnStmt);
             }
-
-            for (CtComment comment : method.getComments()) {
-                if (comment.getCommentType() == CtComment.CommentType.JAVADOC) {
-                    emptyBlock.addComment(comment.clone());
-                }
-            }
-
             method.setBody(emptyBlock);
         }
     }
