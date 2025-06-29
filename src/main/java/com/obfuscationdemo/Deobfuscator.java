@@ -302,6 +302,11 @@ public class Deobfuscator {
             CtFieldReference<?> fieldRef = fieldAccess.getVariable();
             String fieldName = fieldRef.getSimpleName();
 
+            // Skip annotation references (they should not be deobfuscated)
+            if (fieldAccess.toString().startsWith("@")) {
+                return;
+            }
+
             // Skip if there's no declaring type (which shouldn't happen for a field access)
             if (fieldRef.getDeclaringType() == null) {
                 return;
