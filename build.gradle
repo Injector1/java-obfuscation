@@ -14,7 +14,32 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
 
+    // Mockito dependencies
+    testImplementation 'org.mockito:mockito-core:5.7.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.7.0'
+
     implementation 'fr.inria.gforge.spoon:spoon-core:10.4.1'
+
+    // Spring Framework dependencies
+    implementation 'org.springframework:spring-context:5.3.21'
+    implementation 'org.springframework:spring-tx:5.3.21'
+    implementation 'org.springframework:spring-orm:5.3.21'
+    implementation 'org.springframework:spring-beans:5.3.21'
+
+    // Add Spring JDBC - contains EmptyResultDataAccessException
+    implementation 'org.springframework:spring-jdbc:5.3.21'
+
+    // Spring Data JPA
+    implementation 'org.springframework.data:spring-data-jpa:2.7.2'
+
+    // JPA API
+    implementation 'javax.persistence:javax.persistence-api:2.2'
+
+    // Spring Cache abstraction
+    implementation 'org.springframework:spring-context-support:5.3.21'
+
+    // For testing Spring components
+    testImplementation 'org.springframework:spring-test:5.3.21'
 }
 
 java {
