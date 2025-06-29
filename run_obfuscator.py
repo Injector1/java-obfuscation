@@ -149,47 +149,57 @@ def generate_tests_with_llm(java_code_string, code_description, class_name):
     3. Include these imports:
        import org.junit.jupiter.api.*;
        import static org.junit.jupiter.api.Assertions.*;
+       import static org.mockito.Mockito.*;
+       import org.mockito.junit.jupiter.MockitoExtension;
+       import org.junit.jupiter.api.extension.ExtendWith;
+       import java.util.*;
        import source.{class_name};
+    4. ALWAYS use @ExtendWith(MockitoExtension.class) annotation on your test class
+    5. For testing classes with dependencies (like Spring services), use Mockito to mock dependencies:
+       - Use @Mock annotation for dependency fields, OR
+       - Use mock(ClassName.class) in test methods
+       - Use when().thenReturn() to stub method calls
+       - Use verify() to verify interactions
     
-    4. If the class has inner classes, also import them explicitly using the proper syntax:
+    6. If the class has inner classes, also import them explicitly using the proper syntax:
        import source.{class_name}.InnerClassName;
     
-    5. ONLY test methods that exist in the provided code. Here are the available public methods:
-{method_list}
+    7. ONLY test methods that exist in the provided code. Here are the available public methods:
+    {method_list}
     
-    6. For each method in the class, create AT LEAST 2 test methods:
+    8. For each method in the class, create AT LEAST 2 test methods:
        - One positive test with valid input demonstrating expected behavior
        - One negative test with invalid input or edge cases
-       - Additional test cases for complex methods with multiple code paths
+       - Use proper mocking for dependencies if necessary (repositories, services, etc.)
        - Use proper assertions for each test
        - Handle exceptions correctly with try-catch or assertThrows
        - Do NOT access private fields
        - Do NOT create instances of private inner classes directly
        - Do NOT call methods that don't exist in the class
        - Name your test methods clearly (e.g., testMethodName_validInput, testMethodName_invalidInput)
-       
-    7. IMPORTANT: CAREFULLY CHECK ACCESS MODIFIERS before attempting to use any class members:
-       - Do NOT access any private fields (this is not allowed in Java)
-       - Do NOT call any private constructors (if the constructor is private, you cannot instantiate directly)
-       - Do NOT access protected methods
-       - Do NOT access package-private methods
-       - ONLY use public methods and constructors
-       - Before using ANY member, check its modifier (public, private, protected, package-private)
-       - If you see the keyword "private" in the code, that means you CANNOT access that member directly
     
-    8. IMPORTANT: For inner classes:
-       - NEVER use syntax like 'objectInstance.new InnerClassName()' - this is invalid Java
-       - If you need to test code that involves inner classes, only use public methods that return instances of those inner classes
-       - Inner class instances must be obtained through public methods that return them
-       - If no method returns an inner class instance, then the inner class isn't meant to be directly tested
-       - Use proper static nested class syntax if applicable: ClassName.StaticNestedClass
-       - NEVER try to instantiate an inner class directly if its constructor has private access
+    9. MOCKING GUIDELINES:
+       - For repository dependencies, mock them using @Mock or mock()
+       - IMPORTANT: Repository methods in this codebase return DIRECT OBJECTS, NOT Optional<>
+       - For findById methods: when(repo.findById(id)).thenReturn(entity) or thenReturn(null)
+       - For findAll methods: when(repo.findAll()).thenReturn(List.of(entity1, entity2)) or thenReturn(Collections.emptyList())
+       - DO NOT use Optional.of() or Optional.empty() unless you see Optional explicitly in the method signature
+       - Always verify important interactions with verify()
+       - Mock external dependencies, not the class under test
     
-    9. IMPORTANT: Do NOT include any explanatory text or markdown - only output valid Java code
-    10. IMPORTANT: Your response MUST start with "package source;" and be directly compilable
+    10. IMPORTANT: CAREFULLY CHECK ACCESS MODIFIERS before attempting to use any class members:
+        - Do NOT access any private fields (this is not allowed in Java)
+        - Do NOT call any private constructors (if the constructor is private, you cannot instantiate directly)
+        - Do NOT access protected methods
+        - Do NOT access package-private methods
+        - ONLY use public methods and constructors
+    
+    11. IMPORTANT: Do NOT include any explanatory text or markdown - only output valid Java code
+    12. IMPORTANT: Your response MUST start with "package source;" and be directly compilable
+    13. IMPORTANT: Every test method signature MUST end with "throws Exception"
     
     The Java code to test is as follows:
-{java_code_string}
+    {java_code_string}
     '''
 
     payload = {
@@ -237,17 +247,20 @@ def generate_tests_with_llm(java_code_string, code_description, class_name):
     return None
 
 def ensure_junit_imports(code_text):
-    """Ensure that necessary JUnit imports are present in the code."""
-    # Check if static imports for assertions are present
-    static_assertion_import = "import static org.junit.jupiter.api.Assertions.*;"
-    junit_api_import = "import org.junit.jupiter.api.*;"
-    arrays_import = "import java.util.Arrays;"
-
-    # Check if code already has the imports
-    has_static_assertions = "import static org.junit.jupiter.api.Assertions" in code_text
-    has_junit_api = "import org.junit.jupiter.api" in code_text
-    needs_arrays = 'assertArrayEquals' in code_text or 'Arrays.toString' in code_text or 'Arrays.equals' in code_text
-    has_arrays = arrays_import in code_text
+    """Ensure that necessary JUnit and Mockito imports are present in the code."""
+    # Required imports with their detection patterns
+    imports_to_check = [
+        ("import static org.junit.jupiter.api.Assertions.*;", "import static org.junit.jupiter.api.Assertions"),
+        ("import org.junit.jupiter.api.*;", "import org.junit.jupiter.api"),
+        ("import static org.mockito.Mockito.*;", "mock("),
+        ("import org.mockito.Mock;", "@Mock"),
+        ("import org.mockito.junit.jupiter.MockitoExtension;", "MockitoExtension"),
+        ("import org.junit.jupiter.api.extension.ExtendWith;", "@ExtendWith"),
+        ("import java.util.*;", "List.of("),
+        ("import org.springframework.dao.EmptyResultDataAccessException;", "EmptyResultDataAccessException"),
+        ("import org.springframework.dao.DataAccessException;", "DataAccessException"),
+        ("import org.springframework.orm.ObjectRetrievalFailureException;", "ObjectRetrievalFailureException"),
+    ]
 
     # Find package statement or the first line to insert imports after
     lines = code_text.splitlines()
@@ -258,18 +271,11 @@ def ensure_junit_imports(code_text):
             insert_position = i + 1
             break
 
-    # Insert missing imports
-    if not has_static_assertions:
-        lines.insert(insert_position, static_assertion_import)
-        insert_position += 1
-
-    if not has_junit_api:
-        lines.insert(insert_position, junit_api_import)
-        insert_position += 1
-
-    if needs_arrays and not has_arrays:
-        lines.insert(insert_position, arrays_import)
-        insert_position += 1
+    # Check and add missing imports
+    for import_statement, check_pattern in imports_to_check:
+        if check_pattern in code_text and import_statement not in code_text:
+            lines.insert(insert_position, import_statement)
+            insert_position += 1
 
     # Add an empty line after imports if there isn't one already
     if insert_position < len(lines) and lines[insert_position].strip() != "":
