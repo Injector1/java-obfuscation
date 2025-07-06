@@ -209,7 +209,7 @@ def generate_tests_with_llm(java_code_string, code_description, class_name):
     }
 
     try:
-        response = requests.post(OLLAMA_API_URL, json=payload, timeout=180)
+        response = requests.post(OLLAMA_API_URL, json=payload, timeout=600)
         response.raise_for_status()
 
         response_data = response.json()
@@ -232,7 +232,7 @@ def generate_tests_with_llm(java_code_string, code_description, class_name):
         print("Please ensure the API is reachable and you are connected to the university VPN.")
         print(f"Details: {e}")
     except requests.exceptions.Timeout as e:
-        print(f"Request to Ollama API timed out after 180 seconds.")
+        print(f"Request to Ollama API timed out after 600 seconds.")
         print(f"Details: {e}")
     except requests.exceptions.HTTPError as e:
         print(f"HTTP error occurred while communicating with Ollama API: {e.response.status_code} {e.response.reason}")
