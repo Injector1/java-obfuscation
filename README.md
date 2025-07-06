@@ -57,8 +57,6 @@ The Python script `run_obfuscator.py` orchestrates the process with three modes:
 
 Output directories:
 - Original tests: Generated from `src/main/java/source/`
-- Bodies mode: `build/obfuscated-source-bodies/`
-- Names mode: `build/obfuscated-source-names/` (with deobfuscation applied to tests)
 
 ## Getting Started with Docker
 
