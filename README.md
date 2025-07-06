@@ -75,4 +75,4 @@ Output directories:
 
 2. **Run with specific class**:
    ```bash
-   docker run --rm obfuscator-app --class_name Clinic
+   docker run --rm obfuscator-app --class_name ClinicServiceImpl
