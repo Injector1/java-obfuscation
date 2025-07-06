@@ -74,3 +74,26 @@ Output directories:
 2. **Run with specific class**:
    ```bash
    docker run --rm obfuscator-app --class_name ClinicServiceImpl
+
+
+## Troubleshooting
+
+### Non-deterministic LLM Output
+The output from the LLM (DevStral) is not deterministic, which means running the same prompt multiple times may produce different results. Sometimes the LLM may not follow all the rules specified in the prompt, which can cause the pipeline to fail. If you encounter failures during test generation:
+
+- Try running the pipeline again with the same parameters
+- Check the generated test code for syntax errors or incomplete responses
+
+### Connection and Timeout Issues
+If the LLM does not generate any test output or the request times out:
+
+- Ensure you are connected to the University of Passau VPN, which is required to access the DevStral API
+- Increase the timeout value in `run_obfuscator.py` (currently set to 600 seconds) by modifying the `requests.post()` timeout parameter
+- For larger classes, longer timeouts may be necessary as the LLM requires more processing time
+
+### Deobfuscation Failures
+If test deobfuscation fails:
+
+- Verify that the mapping files were correctly generated during obfuscation
+- Check that the test file follows the expected naming patterns
+- Manually inspect the test file to ensure it's using the obfuscated method names consistently
