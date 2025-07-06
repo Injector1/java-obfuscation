@@ -200,21 +200,36 @@ public class Deobfuscator {
         public void process(CtMethod<?> method) {
             String methodName = method.getSimpleName();
 
-            // Look for test methods that might be testing obfuscated methods
+            if (!methodName.startsWith("test")) {
+                return;
+            }
+
             for (Map.Entry<String, String> entry : reverseMethodMapping.entrySet()) {
                 String obfuscatedName = entry.getKey();
                 String originalName = entry.getValue();
 
-                // Check if the test method name contains the obfuscated name
+                if (methodName.startsWith("test" + obfuscatedName + "_") ||
+                        methodName.startsWith("test" + capitalize(obfuscatedName) + "_")) {
+                    String suffix = methodName.substring(methodName.indexOf('_'));
+                    String newMethodName = "test" + capitalize(originalName) + suffix;
+                    method.setSimpleName(newMethodName);
+                    System.out.println("Renamed test method: " + methodName + " -> " + newMethodName);
+                    return;
+                }
+
+                if (methodName.equals("test" + obfuscatedName) ||
+                        methodName.equals("test" + capitalize(obfuscatedName))) {
+                    String newMethodName = "test" + capitalize(originalName);
+                    method.setSimpleName(newMethodName);
+                    System.out.println("Renamed test method: " + methodName + " -> " + newMethodName);
+                    return;
+                }
+
                 if (methodName.contains(obfuscatedName)) {
                     String newMethodName = methodName.replace(obfuscatedName, originalName);
                     method.setSimpleName(newMethodName);
                     System.out.println("Renamed test method: " + methodName + " -> " + newMethodName);
-                } else if (methodName.equals("test" + obfuscatedName) ||
-                         methodName.equals("test" + capitalize(obfuscatedName))) {
-                    String newMethodName = "test" + capitalize(originalName);
-                    method.setSimpleName(newMethodName);
-                    System.out.println("Renamed test method: " + methodName + " -> " + newMethodName);
+                    return;
                 }
             }
         }
