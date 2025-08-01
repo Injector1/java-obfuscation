@@ -47,6 +47,8 @@ The project includes a comprehensive set of Java classes from a pet clinic domai
 - `Main.java` - Simple demonstration class
 - `StopWatch.java` - Timing utility
 
+**Note**: The codebase includes intentional bugs for testing purposes. See [seeded-bugs.md](seeded-bugs.md) for details on the specific bugs that have been introduced to evaluate test generation effectiveness.
+
 ## Obfuscation Modes
 
 The Python script `run_obfuscator.py` orchestrates the process with three modes:
